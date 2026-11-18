@@ -24,6 +24,11 @@ const CAP_LABEL: Record<Capability, string> = {
   departments: "Departments",
   settings: "Policies / settings",
   roles: "Roles / permissions",
+  manageLocations: "Offices, assigned office, remote exceptions",
+  editPolicy: "Company attendance rules",
+  manageShifts: "Shifts, roster, holidays",
+  approveCorrections: "Approve attendance corrections",
+  verificationHistory: "Location verification history",
 };
 
 /** Living reference for the Phase 1 design system. Sample values here are labelled as examples. */

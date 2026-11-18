@@ -24,7 +24,12 @@ export type Capability =
   | "reports"
   | "departments"
   | "settings"
-  | "roles";
+  | "roles"
+  | "manageLocations"
+  | "editPolicy"
+  | "manageShifts"
+  | "approveCorrections"
+  | "verificationHistory";
 
 export const ROLES: { id: Role; label: string }[] = [
   { id: "admin", label: "Admin" },
@@ -46,6 +51,12 @@ export const MATRIX: Record<Capability, Record<Role, Scope>> = {
   departments: { admin: "all", hr: "limited", manager: "none", employee: "none" },
   settings: { admin: "all", hr: "limited", manager: "none", employee: "none" },
   roles: { admin: "all", hr: "none", manager: "none", employee: "none" },
+  // Finer rules inside Settings and attendance (mirrored by the database):
+  manageLocations: { admin: "all", hr: "all", manager: "none", employee: "none" }, // offices, assigned office, remote exceptions
+  editPolicy: { admin: "all", hr: "none", manager: "none", employee: "none" }, // company-wide attendance rules
+  manageShifts: { admin: "all", hr: "all", manager: "none", employee: "none" }, // shifts, roster, holidays
+  approveCorrections: { admin: "all", hr: "all", manager: "team", employee: "none" },
+  verificationHistory: { admin: "all", hr: "all", manager: "none", employee: "none" },
 };
 
 export function scopeOf(role: Role, cap: Capability): Scope {

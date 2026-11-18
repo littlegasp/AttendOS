@@ -4,12 +4,13 @@ import { useState } from "react";
 import { NavIcon } from "@/components/Icons";
 import { ModulePage } from "@/components/ModulePage";
 import { RosterBoard } from "@/components/RosterBoard";
+import { ShiftsPanel } from "@/components/ShiftsPanel";
 import { EmptyState } from "@/components/States";
 import { Tabs } from "@/components/Tabs";
 import { GlassCard } from "@/components/ui";
 import { useSession } from "@/lib/session";
 
-type Tab = "roster" | "shifts" | "assignments";
+type Tab = "roster" | "shifts";
 
 export default function ShiftsPage() {
   const { preview, role } = useSession();
@@ -25,7 +26,6 @@ export default function ShiftsPage() {
         tabs={[
           { id: "roster", label: "Work roster" },
           { id: "shifts", label: "Shifts" },
-          { id: "assignments", label: "Shift assignments" },
         ]}
       />
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
@@ -33,7 +33,7 @@ export default function ShiftsPage() {
           <>
             <p className="page-sub">
               {canEdit
-                ? "Set who works from which office, who works remotely, and who is off. Check-in follows this roster."
+                ? "Set where each person works (office, remote or day off) and which shift they work. Click a day to change one date, or set a weekly pattern."
                 : role === "manager"
                   ? "Where your team works each day. HR sets the roster."
                   : "Where you work each day. HR sets the roster."}
@@ -50,14 +50,12 @@ export default function ShiftsPage() {
               <RosterBoard />
             )}
           </>
-        ) : (
+        ) : preview ? (
           <GlassCard>
-            <EmptyState
-              icon={<NavIcon name="shift" />}
-              title={tab === "shifts" ? "Shift timings are built in Phase 4" : "Shift assignments are built in Phase 4"}
-              body="Start/end times, breaks, grace periods and overnight shifts arrive with Leave & Shifts. The work roster (office / remote / off) already works."
-            />
+            <EmptyState icon={<NavIcon name="shift" />} title="Shifts need the company database" body="Once connected, HR creates shifts with start and end times, break and grace period (overnight shifts included) and assigns them in the roster." />
           </GlassCard>
+        ) : (
+          <ShiftsPanel />
         )}
       </div>
     </ModulePage>
