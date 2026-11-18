@@ -9,7 +9,7 @@ const root = join(__dirname, "..");
 
 test("every menu item has a route that shares the shell", () => {
   for (const it of ALL_ITEMS) {
-    const file = it.href === "/" ? "src/app/page.tsx" : `src/app${it.href}/page.tsx`;
+    const file = it.href === "/" ? "src/app/(app)/page.tsx" : `src/app/(app)${it.href}/page.tsx`;
     assert.ok(existsSync(join(root, file)), `missing ${file}`);
   }
 });

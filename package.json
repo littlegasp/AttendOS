@@ -10,9 +10,11 @@
     "test": "tsx --test tests/*.test.ts",
     "check": "tsc --noEmit && eslint src tests && tsx --test tests/*.test.ts",
     "deploy": "next build && wrangler deploy",
-    "preview": "next build && wrangler dev"
+    "preview": "next build && wrangler dev",
+    "test:db": "sh supabase/tests/run.sh"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.119.1",
     "next": "15.5.27",
     "react": "19.1.0",
     "react-dom": "19.1.0"

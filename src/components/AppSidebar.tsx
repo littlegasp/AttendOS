@@ -8,6 +8,7 @@ import { useSession } from "@/lib/session";
 import { IconFold, NavIcon } from "./Icons";
 import { SlidingHighlight } from "./SlidingHighlight";
 import { MENU_KEY } from "./ThemeToggle";
+import { BRAND } from "@/lib/brand";
 
 function isOn(path: string, href: string) {
   return href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
@@ -15,6 +16,10 @@ function isOn(path: string, href: string) {
 
 /** Brand mark: an orange "A" ring. Plain SVG so it themes with the tokens. */
 export function BrandMark() {
+  if (BRAND.logo) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img className="brand-mark brand-logo" src={BRAND.logo} alt="" width={34} height={34} />;
+  }
   return (
     <svg className="brand-mark" viewBox="0 0 32 32" width="34" height="34" aria-hidden="true">
       <rect x="1" y="1" width="30" height="30" rx="9" className="bm-bg" />
@@ -102,11 +107,11 @@ export function AppSidebar() {
   return (
     <nav className="sidebar" aria-label="Main">
       <div className="brand-row">
-        <Link href="/" className="brand" aria-label="AttendOS home">
+        <Link href="/" className="brand" aria-label={`${BRAND.appName} home`}>
           <BrandMark />
           <span className="brand-tx">
-            <strong>AttendOS</strong>
-            <small>Attendance &amp; Workforce</small>
+            <strong>{BRAND.appName}</strong>
+            <small>{BRAND.tagline}</small>
           </span>
         </Link>
         <FoldButton />
@@ -117,7 +122,7 @@ export function AppSidebar() {
           <span className="nav-ic"><NavIcon name="dashboard" /></span>
           <span className="nav-tx">Design system</span>
         </Link>
-        <span className="nav-tx tiny muted foot-ver">v0.1 · Phase 1 foundation</span>
+        <span className="nav-tx tiny muted foot-ver">v0.2 · Phase 2 attendance core</span>
       </div>
     </nav>
   );

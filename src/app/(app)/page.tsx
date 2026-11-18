@@ -52,7 +52,7 @@ export default function DashboardPage() {
         <SectionCard title="Today's attendance" subtitle={`Scope: ${scope}`}>
           <EmptyState
             title="No attendance data yet"
-            body="Present, Absent, Late and On Leave counts appear here once check-in is live (Phase 2) and employees are added (Phase 3). They are always calculated from real records in your organization's time zone."
+            body="Present, Absent, Late and On Leave counts arrive with the Attendance Register (Phase 3). They are always calculated from real check-ins in your organization's time zone."
           />
         </SectionCard>
         <SectionCard title="Recent activity" subtitle="Check-ins, late arrivals and pending leave">
@@ -62,8 +62,8 @@ export default function DashboardPage() {
 
       <GlassCard className="note-card">
         <p className="small">
-          <strong>Phase 1 foundation.</strong> You&apos;re looking at the shared shell, theme and building blocks. See the{" "}
-          <Link href="/design">design system page</Link> for every component in both themes.
+          <strong>Now live:</strong> check-in and check-out with location checks on <Link href="/my-attendance">My Attendance</Link>, and the office / remote{" "}
+          <Link href="/shifts">work roster</Link>. Office locations are set in Settings. See the <Link href="/design">design system page</Link> for every component.
         </p>
       </GlassCard>
     </PageContainer>

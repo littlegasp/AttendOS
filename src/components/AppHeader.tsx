@@ -14,6 +14,7 @@ import { Popover } from "./Popover";
 import { ThemeToggle } from "./ThemeToggle";
 import { BrandMark } from "./AppSidebar";
 import { EmptyState } from "./States";
+import { BRAND } from "@/lib/brand";
 
 /** Jump to any screen the signed-in role can open. Ctrl/⌘ + K focuses it. */
 function GlobalSearch() {
@@ -176,14 +177,16 @@ function ProfileMenu() {
                   </button>
                 ))}
               </div>
-              <p className="tiny muted">Design preview only. Real roles come from sign-in in Phase 2.</p>
+              <p className="tiny muted">Design preview only. In a connected copy the role comes from sign-in.</p>
             </fieldset>
           ) : null}
           <div className="menu-list">
             <Link href="/my-attendance" className="menu-item" onClick={close}>My Attendance</Link>
-            <button type="button" className="menu-item" disabled title="Sign-in arrives in Phase 2">
-              Sign out
-            </button>
+            {s.preview ? (
+              <button type="button" className="menu-item" disabled title="No sign-in in design preview">Sign out</button>
+            ) : (
+              <button type="button" className="menu-item" onClick={() => s.signOut()}>Sign out</button>
+            )}
           </div>
         </div>
       )}
@@ -199,13 +202,13 @@ export function AppHeader({ onOpenMenu }: { onOpenMenu: () => void }) {
       <button type="button" className="icon-btn menu-btn" onClick={onOpenMenu} aria-label="Open the menu">
         <IconMenu />
       </button>
-      <Link href="/" className="header-brand" aria-label="AttendOS home">
+      <Link href="/" className="header-brand" aria-label={`${BRAND.appName} home`}>
         <BrandMark />
-        <strong>AttendOS</strong>
+        <strong>{BRAND.appName}</strong>
       </Link>
       <div className="header-context">
-        <span className="tiny muted">{current ? sectionOf(current.href) : "AttendOS"}</span>
-        <strong className="header-title">{current?.label ?? EXTRA_TITLES[normalise(path)] ?? "AttendOS"}</strong>
+        <span className="tiny muted">{current ? sectionOf(current.href) : BRAND.appName}</span>
+        <strong className="header-title">{current?.label ?? EXTRA_TITLES[normalise(path)] ?? BRAND.appName}</strong>
       </div>
       <GlobalSearch />
       <div className="header-actions">

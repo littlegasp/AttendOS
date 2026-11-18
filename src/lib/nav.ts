@@ -46,7 +46,7 @@ export const NAV: NavGroup[] = [
     label: "Management",
     items: [
       { href: "/leave", label: "Leave Management", icon: "leave", cap: "leave", phase: 4, blurb: "Leave requests, approvals and balances" },
-      { href: "/shifts", label: "Shifts & Schedules", icon: "shift", cap: "shifts", phase: 4, blurb: "Shifts, assignments and roster" },
+      { href: "/shifts", label: "Shifts & Schedules", icon: "shift", cap: "shifts", phase: 4, blurb: "Work roster, shifts and assignments" },
       { href: "/holidays", label: "Holidays", icon: "holiday", cap: "holidays", phase: 4, blurb: "Holiday calendar" },
     ],
   },

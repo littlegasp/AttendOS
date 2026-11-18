@@ -26,12 +26,43 @@ No AttendOS repo existed, so the project starts fresh on **studio-crm's stack an
 - Charts, DataTable/FilterBar/Pagination/DateRangePicker/ExportMenu, FileUpload and the attendance
   components (CheckInButton, LocationVerificationCard, Timeline, Timer) are built with their modules.
 
-## Next — Phase 2 (attendance core)
-Supabase project, sign-in, organization/employee/attendance-event tables with RLS,
-a server-side check-in function (server time, geofence distance, accuracy, no duplicate open session),
-My Attendance screen with the GPS flow and every failure case from guide section 6.
+## Decisions (19 Nov 2026)
+- **One company per copy.** Each company gets its own copy (own Supabase project, own address) with its
+  own name, logo and accent colour in `src/lib/brand.ts`, so it feels like their own system.
+  Status colours never change between companies.
+- **Several office locations**, each a map point + area size (25–2000 m).
+- **Office / remote roster set by HR**: a weekly pattern per person plus changes for single dates.
+  Check-in follows it: office days must be inside the (rostered) office area, remote days need no
+  office area, days off block check-in.
 
-### Open questions for Phase 2
-- One organization or several (multi-tenant) from day one?
-- Office coordinates/radius per location, or one office to start?
-- Remote attendance policy: allowed for some people, or not in V1?
+## Phase 2 — attendance core (done, awaiting review)
+- Database `supabase/migrations/0001_attendance_core.sql`: organization rules, locations, departments,
+  employees (first sign-in becomes Admin), roster pattern + date changes, attendance events,
+  refused attempts, precise coordinates in a separate HR-only table, audit log on every roster,
+  location, rules and employee change. Row level security on everything; anon has no access.
+- `punch()` decides every check-in/out on the server: server time, roster, accuracy, distance to the
+  office (haversine), one open session at a time (locked per person), check-out follows the check-in's mode.
+- `my_today()`: today's plan, events and server clock for My Attendance.
+- `set_roster_pattern()`: replaces weekly patterns for several people in one all-or-nothing step.
+- Screens: Sign in + password reset, My Attendance (clock from server time, plan, Check In/Out,
+  location verification card, every failure message, timeline, worked-time timer, screen-reader
+  announcements), Shifts & Schedules → Work roster (HR edits, manager sees team, employee sees own),
+  Settings → Locations & GPS (locations for HR/Admin; attendance rules Admin-only).
+- Tests: `npm run test:db` (39 database checks on a local Postgres), `npm test` (14 app checks).
+
+### Setting up a company copy
+1. Create a Supabase project in the Mumbai region; run `0001_attendance_core.sql` in the SQL editor.
+2. Put the project URL and anon key in Cloudflare build variables (see `.env.example`).
+3. Set `src/lib/brand.ts` and the logo; set the organization time zone if not Asia/Kolkata.
+4. The first person to sign up becomes Admin. Until the Employees module (Phase 3), add people with
+   Supabase → Authentication → Invite user; they appear in the roster after first sign-in.
+
+### Known limits of Phase 2
+- No in-app employee onboarding, managers or departments yet (Phase 3) — set `manager_id` in the
+  database if needed. No attendance corrections yet (Phase 3, with reasons and audit).
+- Shift timings / late rules / overnight shifts come in Phase 4; sessions are not tied to a shift yet.
+- Without the two build variables the app runs as the labelled design preview.
+
+## Next — Phase 3 (workforce)
+Employees (invite, profile, manager, department, home office, deactivate), departments,
+Attendance Register (daily/monthly, filters, export within scope) and HR corrections with audit.

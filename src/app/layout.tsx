@@ -1,11 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import { AppShell } from "@/components/AppShell";
+import { BRAND, brandCss } from "@/lib/brand";
 import { THEME_BOOT } from "@/components/ThemeToggle";
 
 export const metadata: Metadata = {
-  title: { default: "AttendOS", template: "%s · AttendOS" },
-  description: "AttendOS — Attendance & Workforce Management",
+  title: { default: BRAND.appName, template: `%s · ${BRAND.appName}` },
+  description: `${BRAND.appName} — ${BRAND.tagline}`,
   robots: { index: false, follow: false },
   formatDetection: { telephone: false },
 };
@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
+        <style dangerouslySetInnerHTML={{ __html: brandCss() }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         {/* eslint-disable-next-line @next/next/no-page-custom-font */}
@@ -32,7 +33,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <div className="backdrop" aria-hidden="true" />
-        <AppShell>{children}</AppShell>
+        {children}
       </body>
     </html>
   );

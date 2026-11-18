@@ -23,4 +23,6 @@ functions for anything that must be trusted (server time, geofence, duplicates, 
 - Keep `public/_headers` (geolocation allowed for this site only).
 
 ## Checks before pushing
-`npm run check` (tsc + eslint + tests) and `npm run build`.
+`npm run check` (tsc + eslint + tests), `npm run test:db` when SQL changes (needs a local Postgres:
+PGHOST/PGPORT/PGUSER), and `npm run build`. New SQL goes in a new numbered migration, never by editing
+one that has been run on a company's database.

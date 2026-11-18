@@ -11,6 +11,7 @@ import { AppSidebar, BrandMark, NavList } from "./AppSidebar";
 import { ClickFeel } from "./ClickFeel";
 import { IconClose, IconMore, NavIcon } from "./Icons";
 import { Toaster } from "./Toaster";
+import { BRAND } from "@/lib/brand";
 
 /** Phones: slide-in drawer holding the full grouped menu. */
 function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -37,8 +38,8 @@ function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void })
           <span className="brand">
             <BrandMark />
             <span className="brand-tx">
-              <strong>AttendOS</strong>
-              <small>Attendance &amp; Workforce</small>
+              <strong>{BRAND.appName}</strong>
+              <small>{BRAND.tagline}</small>
             </span>
           </span>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close the menu"><IconClose /></button>
