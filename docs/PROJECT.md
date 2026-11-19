@@ -238,3 +238,14 @@ every table and callable function across roles and companies), `e2e/regression.p
 workflows, exports, print, 208 screen loads), `supabase/perf/` (100/300/600 people). Status per feature:
 `docs/STATUS.md`; performance: `docs/PERFORMANCE.md`.
 Results: 356 database checks, 35 app checks, 36 real sign-in checks, 26 browser regression checks, all passing.
+
+## Pilot 01 preparation (19 Nov 2026, documents only — nothing deployed)
+Approved: a controlled pilot (one company, ≤100 people, 2–4 weeks, parallel running for 2 weeks). Added the
+runbook in `docs/pilot/` (deployment checklist, environment guide, test checklist, known limitations, rollback,
+recommendation) and `supabase/deploy/` (`verify_hosted.sql`, `create_pilot_company.sql`, both tested locally).
+Decisions: no change to the reporting architecture for the pilot; the daily summary table
+(`docs/requirements/DAILY-SUMMARY.md`) is required before companies above about 150 people; Supabase's statement
+timeout is never raised as a workaround; the app uses only the URL and the publishable key — no secret key.
+`phase-4-5` is not merged into `main` until the hosted checks pass. Correction: there are 21 tables (an earlier
+report said 22).
+Next: owner's go-ahead → hosted setup (checklist A–F) → pilot.

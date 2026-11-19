@@ -13,7 +13,7 @@ Supabase project — **nothing is yet, because no hosted project exists.** **Pen
 | Password reset (signs out other devices) | ✓ | ✓ real Auth | — | — |
 | **Employee invitations** (Send invite → one-time link → set password) | ✓ new | ✓ real Auth: correct company + record, no duplicates in 10 min, sender stays signed in | — | Branded invite wording in the e-mail template |
 | Login ↔ employee linking (confirmed work e-mail only, never twice) | ✓ | ✓ DB tests + real Auth | — | — |
-| Multi-company isolation | ✓ | ✓ security matrix: 22 tables × 6 users, all writes, 11 functions with other-company ids, catalog rules | — | Repeat a manual spot-check on hosted |
+| Multi-company isolation | ✓ | ✓ security matrix: 21 tables × 6 users, all writes, 11 functions with other-company ids, catalog rules | — | Repeat a manual spot-check on hosted |
 | Roles (Admin / HR / Manager / Employee) enforced in the database | ✓ | ✓ per-role scope checks | — | — |
 | Audit log (append-only, real actor, sample-data marking) | ✓ | ✓ | — | — |
 | GPS check-in/out: inside, outside, poor accuracy, denied, offline | ✓ | ✓ emulated GPS in Chrome + server checks | — | **Real phones (Android/iOS) in the pilot** |

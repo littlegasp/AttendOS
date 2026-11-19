@@ -1,5 +1,10 @@
 # AttendOS — going live: what is verified and what is still needed
 
+> **Pilot 01 runbook:** follow `docs/pilot/01-DEPLOYMENT-CHECKLIST.md` step by step (with
+> `02-ENVIRONMENT.md`, `03-PILOT-TEST-CHECKLIST.md`, `04-KNOWN-LIMITATIONS.md`, `05-ROLLBACK.md`,
+> `06-RECOMMENDATION.md`). Scripts: `supabase/deploy/verify_hosted.sql` (read-only checks) and
+> `supabase/deploy/create_pilot_company.sql`. This page stays the background reference.
+
 **AttendOS is not production-ready yet.** Nothing has run on a real Supabase project. What has been verified,
 and how:
 
