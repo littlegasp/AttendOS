@@ -259,3 +259,11 @@ critical ones; session ending by SQL, no secret key); company retention and dele
 server-side office check. New checks: `supabase/authcheck/invite_edges.py` (26), `supabase/tests/relink_test.sql`,
 3 browser checks. Defect found and fixed: a login confirmed while access was off never linked —
 `0009_link_on_reactivation.sql`. Status per item: `docs/pilot/STATUS-LEGEND.md`.
+
+## Biometric integration — Phase B1 (19 Nov 2026, documents only, branch `feature/biometric-b1`)
+Owner's spec "AttendOS – Biometric Integration Platform v1.0". B1 audit and proposed architecture in
+`docs/biometric/` (audit, architecture, schema/migration plan 0010–0013, adapter contract, Sync Agent, security,
+hardware compatibility research, test plan, status). Key proposals: gateway as key-checked database functions (no
+server, no secret key); Sync Agent on the company LAN; biometric punches become `attendance_events` rows
+(`source = 'biometric'`) so the existing engine is unchanged; first-in/last-out direction rule; 5-minute app/machine
+reconciliation. Nothing implemented; awaiting owner decisions D1–D9.
