@@ -27,9 +27,10 @@ No AttendOS repo existed, so the project starts fresh on **studio-crm's stack an
   components (CheckInButton, LocationVerificationCard, Timeline, Timer) are built with their modules.
 
 ## Decisions (19 Nov 2026)
-- **One company per copy.** Each company gets its own copy (own Supabase project, own address) with its
-  own name, logo and accent colour in `src/lib/brand.ts`, so it feels like their own system.
-  Status colours never change between companies.
+- ~~One company per copy~~ — **replaced on 19 Nov 2026 (before Phase 3): one shared Supabase project,
+  `company_id` on every table**, isolated by row level security (see "Multi-tenancy" below). Each company
+  still gets its own name, logo and accent colour (now a row in `companies`; `src/lib/brand.ts` is only the
+  fallback for the design preview), so it feels like their own system. Status colours never change.
 - **Several office locations**, each a map point + area size (25–2000 m).
 - **Office / remote roster set by HR**: a weekly pattern per person plus changes for single dates.
   Check-in follows it: office days must be inside the (rostered) office area, remote days need no
@@ -50,12 +51,8 @@ No AttendOS repo existed, so the project starts fresh on **studio-crm's stack an
   Settings → Locations & GPS (locations for HR/Admin; attendance rules Admin-only).
 - Tests: `npm run test:db` (39 database checks on a local Postgres), `npm test` (14 app checks).
 
-### Setting up a company copy
-1. Create a Supabase project in the Mumbai region; run `0001_attendance_core.sql` then `0002_refinement.sql` in the SQL editor.
-2. Put the project URL and anon key in Cloudflare build variables (see `.env.example`).
-3. Set `src/lib/brand.ts` and the logo; set the organization time zone if not Asia/Kolkata.
-4. The first person to sign up becomes Admin. Until the Employees module (Phase 3), add people with
-   Supabase → Authentication → Invite user; they appear in the roster after first sign-in.
+### Setting up (superseded)
+Setup now follows `docs/DEPLOYMENT.md` (one shared project, four migrations, `create_company()`).
 
 ### Known limits of Phase 2
 - No in-app employee onboarding, managers or departments yet (Phase 3) — set `manager_id` in the
@@ -98,6 +95,56 @@ read-only rules for HR), Assignments & exceptions, Verification history.
 | Map tiles / address search | Code calls OpenStreetMap; unreachable from the build sandbox, so tiles were blank in screenshots. Point, circle and coordinates work without tiles. |
 | Production | Not live. Needs a Supabase project (Mumbai), both migrations run, and the two build variables. |
 
-## Next — Phase 3 (workforce)
-Employees (invite, profile, manager, department, home office, deactivate), departments,
-Attendance Register (daily/monthly, filters, export within scope) and HR corrections with audit.
+## Checks before Phase 3 (19 Nov 2026)
+- **Time zone per company:** `companies.timezone` (validated against PostgreSQL's zone list, default
+  **Asia/Kolkata**). Every date/time rule uses `company_tz(c)`, `local_today(c)`, `at_local(c, d, t)`.
+  Admin changes it in Settings → Locations & GPS → Company rules. The demo no longer uses Pacific/Kiritimati.
+- **Multi-tenancy** (`0003_multi_tenant.sql`): `companies` replaces `organization`; `company_id` on locations,
+  departments, designations, employees, shifts, holidays and audit_log; employee-keyed tables (events,
+  rosters, corrections, exceptions, coordinates) reach the company through the employee. Every policy is
+  scoped by `my_company()`; `check_company_refs` refuses links to another company's office, shift,
+  department, manager or designation; `company_id` cannot be changed after insert. Anonymous visitors can
+  only read a company's public branding (`company_brand(slug)`), used by `/login?company=slug`.
+  `create_company()` is owner-only. Proved by `tenancy_test.sql` (two companies, every table and function).
+- **Permissions and audit review:** sensitive changes are checked by triggers, not just the UI (roles Admin-only,
+  no self-role/self-deactivate, HR cannot change Admin/HR access, company rules Admin-only, last Admin kept).
+  Audit triggers on companies, employees, departments, designations, locations, shifts, holidays, roster
+  and shift patterns/days, remote exceptions; correction decisions logged explicitly. Each entry records who
+  (`actor_employee`), when, before and after. HR/Admin read it in Settings → Activity log.
+- **Deployment requirements** for Supabase Auth and maps/address search: `docs/DEPLOYMENT.md`.
+
+## Phase 3 — employees and departments (done, awaiting review)
+Database `supabase/migrations/0004_employees.sql` (no tables duplicated; `employees` and `departments` extended):
+- Employees are records first: own id, `user_id` linked when someone signs in with the same **confirmed**
+  e-mail. E-mail unique across the system. Fields added: phone, designation, employment status
+  (probation / confirmed / contract / intern / notice period / exited), exit date, updated time.
+  Already there: joining date, department, reporting manager, assigned office, default shift, role, active.
+- **Employee IDs** `E0001…` per company, automatic, or a custom code (upper-cased, unique in the company).
+- **Designations** table (per company); departments gain head and description; departments are switched
+  off, never deleted.
+- Rules in the database: only Admin assigns HR/Admin/Manager roles (HR can add employees only); nobody
+  changes their own role or deactivates themselves; reporting lines cannot loop or point at inactive people;
+  "Exited" switches access off and sets the exit date; the last active Admin cannot be removed.
+- `my_profile()` for employees; `people_directory()` for pickers (names from live data, company only).
+- Screens: **Employees** (search by name/e-mail/ID/phone, filters for department, designation, office,
+  employment, role, access; pages of 25; table on desktop, cards on phones), **Profile** (work details,
+  sign-in status, direct reports, last 14 days attendance, change history), **Add/Edit** form, **Change role**
+  (Admin), **Deactivate/Reactivate** with confirmation; Managers see their team read-only; employees see
+  **My profile**. **Departments** (Departments | Designations tabs). **Settings → Activity log**.
+- Attendance, GPS, corrections and roster unchanged in behaviour; re-tested on the new schema.
+- Tests: `npm run test:db` 174 database checks (attendance, refinement, tenancy, employees);
+  `npm run check` 24 app checks.
+
+### Known limits of Phase 3
+- No "Send invite" e-mail from the app (needs an Edge Function — see DEPLOYMENT.md); the person signs up
+  with the work e-mail HR entered.
+- Attendance Register moved to Phase 4 with Leave and Reports (not in the Phase 3 brief).
+- No bulk import (CSV) of employees yet.
+
+### What is real and what is not (Phase 3 review)
+Same as the refinement pass: real app, real local PostgreSQL + PostgREST with row level security, signed
+test tokens instead of Supabase Auth, sample companies (Acme Industries, Beta Logistics), offline map tiles.
+Not deployed to a Supabase project yet.
+
+## Next — Phase 4 (do not start until Phase 3 is approved)
+Leave management, Attendance Register (daily/monthly, export within scope), shift/late rules polish.

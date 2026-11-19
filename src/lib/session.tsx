@@ -2,26 +2,43 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { BRAND, brandCss } from "./brand";
 import type { Role } from "./permissions";
 import { friendlyError, isConfigured, supabase } from "./supabase";
 
 /**
- * Who is signed in.
+ * Who is signed in, and which company they belong to.
  *
- * Connected copy: real Supabase sign-in; the role comes from the employees table and the
- * database enforces it (row level security). This gate only decides which screen to show.
+ * Connected copy: real Supabase sign-in. The login is linked to an employee record (by
+ * confirmed e-mail); that record gives the company, role and time zone, and the database
+ * enforces all of it (row level security). This gate only decides which screen to show.
  *
  * Copy with no database configured: a clearly labelled DESIGN PREVIEW where the reviewer
  * picks a role. It holds no people or records.
  */
+export interface Company {
+  id: string;
+  name: string;
+  slug: string;
+  timezone: string;
+  app_name: string | null;
+  logo_url: string | null;
+  accent_dark: string | null;
+  accent_light: string | null;
+}
+
 export interface Session {
   employeeId: string | null;
+  companyId: string | null;
+  company: Company | null;
   name: string;
   email: string;
   role: Role;
   preview: boolean;
   setPreviewRole: (r: Role) => void;
   signOut: () => Promise<void>;
+  /** Re-read the company after an Admin changes its settings (time zone, branding). */
+  refreshCompany: () => void;
 }
 
 interface EmployeeRow {
@@ -30,6 +47,8 @@ interface EmployeeRow {
   email: string;
   role: Role;
   active: boolean;
+  company_id: string;
+  company: Company | null;
 }
 
 const KEY = "attendos.previewRole";
@@ -39,6 +58,17 @@ export function useSession(): Session {
   const s = useContext(Ctx);
   if (!s) throw new Error("useSession must be used inside SessionProvider");
   return s;
+}
+
+/** Name, tagline and logo to show: the company's own branding when set, else the product's. */
+export function useBrand() {
+  const s = useContext(Ctx);
+  const c = s?.company;
+  return {
+    appName: c?.app_name || (c ? c.name : BRAND.appName),
+    tagline: c?.app_name ? c.name : c ? BRAND.tagline : BRAND.tagline,
+    logo: c?.logo_url || BRAND.logo,
+  };
 }
 
 let signingOutHere = false;
@@ -53,8 +83,10 @@ export async function signOut(reason?: string) {
   window.location.replace(reason ? `/login?error=${reason}` : "/login");
 }
 
-async function loadEmployee(id: string): Promise<EmployeeRow | null> {
-  const { data, error } = await supabase().from("employees").select("id, full_name, email, role, active").eq("id", id).maybeSingle<EmployeeRow>();
+const COLS = "id, full_name, email, role, active, company_id, company:companies(id, name, slug, timezone, app_name, logo_url, accent_dark, accent_light)";
+
+async function loadEmployee(userId: string): Promise<EmployeeRow | null> {
+  const { data, error } = await supabase().from("employees").select(COLS).eq("user_id", userId).maybeSingle<EmployeeRow>();
   if (error) throw error;
   return data;
 }
@@ -78,27 +110,41 @@ function PreviewProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
   return (
-    <Ctx.Provider value={{ employeeId: null, name: "Preview user", email: "preview@attendos.local", role, preview: true, setPreviewRole, signOut: async () => {} }}>
+    <Ctx.Provider
+      value={{ employeeId: null, companyId: null, company: null, name: "Preview user", email: "preview@attendos.local", role, preview: true, setPreviewRole, signOut: async () => {}, refreshCompany: () => {} }}
+    >
       {children}
     </Ctx.Provider>
   );
+}
+
+/** Applies the company's accent colour over the default tokens (validated in brandCss). */
+function CompanyAccent({ c }: { c: Company | null }) {
+  if (!c?.accent_dark || !c.accent_light) return null;
+  const css = brandCss({ ...BRAND, accent: { dark: c.accent_dark, light: c.accent_light, darkSoft: c.accent_dark, lightSoft: c.accent_light } });
+  return css ? <style dangerouslySetInnerHTML={{ __html: css }} /> : null;
 }
 
 function LiveProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const path = usePathname();
   const [me, setMe] = useState<EmployeeRow | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let live = true;
     const sb = supabase();
-    async function check(userId: string | null) {
-      if (!userId) return router.replace("/login");
+    async function check(uid: string | null) {
+      if (!uid) return router.replace("/login");
       try {
-        const row = await loadEmployee(userId);
+        const row = await loadEmployee(uid);
         if (!live) return;
-        if (!row || !row.active) return signOut("inactive");
+        // No employee record linked to this login, or the record is switched off.
+        if (!row) return signOut("not-linked");
+        if (!row.active) return signOut("inactive");
+        setUserId(uid);
         setMe(row);
         setProblem(null);
       } catch (e) {
@@ -115,15 +161,16 @@ function LiveProvider({ children }: { children: React.ReactNode }) {
     };
   }, [router]);
 
-  // Re-check on every screen change and when the tab returns, so a deactivated login ends quickly.
-  const id = me?.id;
+  // Re-check on every screen change, when the tab returns, and after company settings change,
+  // so a deactivated login ends quickly and a new time zone applies at once.
   useEffect(() => {
-    if (!id) return;
+    if (!userId) return;
     const recheck = () =>
-      loadEmployee(id)
+      loadEmployee(userId)
         .then((row) => {
-          if (!row || !row.active) return signOut("inactive");
-          setMe((cur) => (cur && (cur.role !== row.role || cur.full_name !== row.full_name) ? row : cur));
+          if (!row) return signOut("not-linked");
+          if (!row.active) return signOut("inactive");
+          setMe((cur) => (cur && JSON.stringify(cur) !== JSON.stringify(row) ? row : cur));
         })
         .catch(() => {
           /* offline: screens show their own message */
@@ -132,7 +179,7 @@ function LiveProvider({ children }: { children: React.ReactNode }) {
     const onVis = () => document.visibilityState === "visible" && recheck();
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [id, path]);
+  }, [userId, path, tick]);
 
   if (problem) {
     return (
@@ -147,7 +194,21 @@ function LiveProvider({ children }: { children: React.ReactNode }) {
   if (!me) return <div className="center-screen" aria-busy="true"><span className="spinner" /><span className="sr-only">Loading…</span></div>;
 
   return (
-    <Ctx.Provider value={{ employeeId: me.id, name: me.full_name, email: me.email, role: me.role, preview: false, setPreviewRole: () => {}, signOut: () => signOut() }}>
+    <Ctx.Provider
+      value={{
+        employeeId: me.id,
+        companyId: me.company_id,
+        company: me.company,
+        name: me.full_name,
+        email: me.email,
+        role: me.role,
+        preview: false,
+        setPreviewRole: () => {},
+        signOut: () => signOut(),
+        refreshCompany: () => setTick((t) => t + 1),
+      }}
+    >
+      <CompanyAccent c={me.company} />
       {children}
     </Ctx.Provider>
   );

@@ -16,6 +16,19 @@ import { shiftTimes } from "./RosterBoard";
 import { EmptyState, ErrorState, LoadingState } from "./States";
 import { Button, FormInput, FormSelect, FormTextarea, SectionCard, StatusBadge } from "./ui";
 
+/** Every IANA time zone the browser knows, India first. */
+export function timeZoneOptions(current: string) {
+  let all: string[] = [];
+  try {
+    all = (Intl as unknown as { supportedValuesOf: (k: string) => string[] }).supportedValuesOf("timeZone");
+  } catch {
+    all = ["Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Europe/London", "America/New_York"];
+  }
+  // The browser may list India as Asia/Calcutta; the database uses Asia/Kolkata.
+  const list = Array.from(new Set(["Asia/Kolkata", ...all.filter((z) => z !== "Asia/Calcutta"), current]));
+  return list.map((z) => ({ value: z, label: z === "Asia/Kolkata" ? "Asia/Kolkata (India, IST)" : z.replace(/_/g, " ") }));
+}
+
 const ORG_COLS = "timezone, max_accuracy_m, remote_location_required, default_work_mode, weekly_off, default_shift_id";
 
 /** Who may do what on this screen — one place, from the permission matrix (the database enforces the same). */
@@ -35,13 +48,13 @@ export function SettingsAccessNote() {
 /* ================================================================ offices + rules */
 
 export function LocationsPanel() {
-  const { role } = useSession();
+  const { role, companyId } = useSession();
   const canManage = can(role, "manageLocations");
   const { data, error, reload } = useLoad(async () => {
     const sb = supabase();
     const [locations, org] = await Promise.all([
       sb.from("locations").select("*").order("name").then(must<Location[]>),
-      sb.from("organization").select(ORG_COLS).single<Org>().then(must<Org>),
+      sb.from("companies").select(ORG_COLS).eq("id", companyId!).single<Org>().then(must<Org>),
     ]);
     return { locations, org };
   }, "locations");
@@ -186,19 +199,26 @@ function LocationModal({ loc, others, onClose, onSaved }: { loc: Location | null
 }
 
 function RulesCard({ org, canEdit, onSaved }: { org: Org; canEdit: boolean; onSaved: () => void }) {
-  const [f, setF] = useState({ acc: String(org.max_accuracy_m), remoteLoc: org.remote_location_required, mode: org.default_work_mode, off: org.weekly_off });
+  const { companyId, refreshCompany } = useSession();
+  const [f, setF] = useState({ acc: String(org.max_accuracy_m), remoteLoc: org.remote_location_required, mode: org.default_work_mode, off: org.weekly_off, tz: org.timezone });
   const [busy, setBusy] = useState(false);
   const acc = Number(f.acc);
   const accErr = !Number.isInteger(acc) || acc < 10 || acc > 2000 ? "Use a whole number from 10 to 2000." : undefined;
-  const dirty = acc !== org.max_accuracy_m || f.remoteLoc !== org.remote_location_required || f.mode !== org.default_work_mode || [...f.off].sort().join() !== [...org.weekly_off].sort().join();
+  const dirty =
+    acc !== org.max_accuracy_m || f.remoteLoc !== org.remote_location_required || f.mode !== org.default_work_mode || f.tz !== org.timezone ||
+    [...f.off].sort().join() !== [...org.weekly_off].sort().join();
 
   async function save() {
     if (accErr) return;
     setBusy(true);
-    const { error } = await supabase().from("organization").update({ max_accuracy_m: acc, remote_location_required: f.remoteLoc, default_work_mode: f.mode, weekly_off: f.off, updated_at: new Date().toISOString() }).eq("id", 1);
+    const { error } = await supabase()
+      .from("companies")
+      .update({ max_accuracy_m: acc, remote_location_required: f.remoteLoc, default_work_mode: f.mode, weekly_off: f.off, timezone: f.tz })
+      .eq("id", companyId!);
     setBusy(false);
-    if (error) return toast({ tone: "danger", title: "Not saved", body: friendlyError(error) });
-    toast({ tone: "success", title: "Attendance rules saved" });
+    if (error) return toast({ tone: "danger", title: "Not saved", body: /time zone|timezone|check/i.test(error.message) ? "That time zone isn't recognised." : friendlyError(error) });
+    toast({ tone: "success", title: "Attendance rules saved", body: f.tz !== org.timezone ? `Time zone is now ${f.tz}. Today's date and every time on screen follow it.` : undefined });
+    refreshCompany();
     onSaved();
   }
 
@@ -237,6 +257,13 @@ function RulesCard({ org, canEdit, onSaved }: { org: Org; canEdit: boolean; onSa
           </div>
         ) : null}
         <FormSelect
+          label="Company time zone"
+          value={f.tz}
+          onChange={(e) => setF((x) => ({ ...x, tz: e.target.value }))}
+          options={timeZoneOptions(f.tz)}
+          helper="Decides what “today” is, shift times, late arrivals and every time shown to your people."
+        />
+        <FormSelect
           label="Remote days"
           value={f.remoteLoc ? "yes" : "no"}
           onChange={(e) => setF((x) => ({ ...x, remoteLoc: e.target.value === "yes" }))}
@@ -265,7 +292,7 @@ function RulesCard({ org, canEdit, onSaved }: { org: Org; canEdit: boolean; onSa
 /* ================================================================ assignments + exceptions */
 
 export function AssignmentsPanel() {
-  const { role } = useSession();
+  const { role, companyId } = useSession();
   const canManage = can(role, "manageLocations");
   const { data, error, reload } = useLoad(async () => {
     const sb = supabase();
@@ -274,7 +301,7 @@ export function AssignmentsPanel() {
       sb.from("locations").select("*").eq("active", true).order("name").then(must<Location[]>),
       sb.from("shifts").select("*").eq("active", true).order("start_time").then(must<Shift[]>),
       sb.from("remote_exceptions").select("*").order("start_date", { ascending: false }).then(must<RemoteException[]>),
-      sb.from("organization").select("timezone").single<{ timezone: string }>().then(must<{ timezone: string }>),
+      sb.from("companies").select("timezone").eq("id", companyId!).single<{ timezone: string }>().then(must<{ timezone: string }>),
     ]);
     return { employees, locations, shifts, exceptions, today: todayIn(org.timezone) };
   }, "assignments");
@@ -453,11 +480,12 @@ const REASON: Record<string, string> = {
 };
 
 export function VerificationHistory() {
+  const { companyId } = useSession();
   const { data, error, reload, loading } = useLoad(async () => {
     const sb = supabase();
     const [rows, org] = await Promise.all([
       sb.rpc("verification_log", { p_limit: 150 }).then(must<LogRow[]>),
-      sb.from("organization").select("timezone, max_accuracy_m").single<{ timezone: string; max_accuracy_m: number }>().then(must<{ timezone: string; max_accuracy_m: number }>),
+      sb.from("companies").select("timezone, max_accuracy_m").eq("id", companyId!).single<{ timezone: string; max_accuracy_m: number }>().then(must<{ timezone: string; max_accuracy_m: number }>),
     ]);
     return { rows, org };
   }, "vlog");

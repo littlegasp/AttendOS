@@ -4,11 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { navFor, normalise } from "@/lib/nav";
-import { useSession } from "@/lib/session";
 import { IconFold, NavIcon } from "./Icons";
 import { SlidingHighlight } from "./SlidingHighlight";
 import { MENU_KEY } from "./ThemeToggle";
-import { BRAND } from "@/lib/brand";
+import { useBrand, useSession } from "@/lib/session";
 
 function isOn(path: string, href: string) {
   return href === "/" ? path === "/" : path === href || path.startsWith(href + "/");
@@ -16,9 +15,10 @@ function isOn(path: string, href: string) {
 
 /** Brand mark: an orange "A" ring. Plain SVG so it themes with the tokens. */
 export function BrandMark() {
-  if (BRAND.logo) {
+  const { logo } = useBrand();
+  if (logo) {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img className="brand-mark brand-logo" src={BRAND.logo} alt="" width={34} height={34} />;
+    return <img className="brand-mark brand-logo" src={logo} alt="" width={34} height={34} />;
   }
   return (
     <svg className="brand-mark" viewBox="0 0 32 32" width="34" height="34" aria-hidden="true">
@@ -104,14 +104,15 @@ function FoldButton() {
 }
 
 export function AppSidebar() {
+  const brand = useBrand();
   return (
     <nav className="sidebar" aria-label="Main">
       <div className="brand-row">
-        <Link href="/" className="brand" aria-label={`${BRAND.appName} home`}>
+        <Link href="/" className="brand" aria-label={`${brand.appName} home`}>
           <BrandMark />
           <span className="brand-tx">
-            <strong>{BRAND.appName}</strong>
-            <small>{BRAND.tagline}</small>
+            <strong>{brand.appName}</strong>
+            <small>{brand.tagline}</small>
           </span>
         </Link>
         <FoldButton />
@@ -122,7 +123,7 @@ export function AppSidebar() {
           <span className="nav-ic"><NavIcon name="dashboard" /></span>
           <span className="nav-tx">Design system</span>
         </Link>
-        <span className="nav-tx tiny muted foot-ver">v0.3 · Refinement pass</span>
+        <span className="nav-tx tiny muted foot-ver">v0.4 · Phase 3</span>
       </div>
     </nav>
   );

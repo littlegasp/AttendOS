@@ -31,14 +31,14 @@ export default function HolidaysPage() {
 }
 
 function HolidayList() {
-  const { role } = useSession();
+  const { role, companyId } = useSession();
   const canEdit = can(role, "manageShifts");
   const { data, error, reload } = useLoad(async () => {
     const sb = supabase();
     const [hol, locations, org] = await Promise.all([
       sb.from("holidays").select("*").order("day").then(must<Holiday[]>),
       sb.from("locations").select("id, name").order("name").then(must<Pick<Location, "id" | "name">[]>),
-      sb.from("organization").select("timezone").single<{ timezone: string }>().then(must<{ timezone: string }>),
+      sb.from("companies").select("timezone").eq("id", companyId!).single<{ timezone: string }>().then(must<{ timezone: string }>),
     ]);
     return { hol, locations, today: todayIn(org.timezone) };
   }, "holidays");

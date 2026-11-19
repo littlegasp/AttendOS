@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ActivityLog } from "@/components/ActivityLog";
 import { NavIcon } from "@/components/Icons";
 import { AssignmentsPanel, LocationsPanel, SettingsAccessNote, VerificationHistory } from "@/components/LocationsPanel";
 import { ModulePage } from "@/components/ModulePage";
@@ -10,7 +11,7 @@ import { GlassCard } from "@/components/ui";
 import { can } from "@/lib/permissions";
 import { useSession } from "@/lib/session";
 
-type Tab = "locations" | "assignments" | "history" | "general" | "access";
+type Tab = "locations" | "assignments" | "history" | "activity" | "general" | "access";
 
 export default function SettingsPage() {
   const { preview, role } = useSession();
@@ -19,6 +20,7 @@ export default function SettingsPage() {
     { id: "locations", label: "Locations & GPS" },
     { id: "assignments", label: "Assignments & exceptions" },
     ...(can(role, "verificationHistory") ? [{ id: "history" as Tab, label: "Verification history" }] : []),
+    ...(can(role, "viewAudit") ? [{ id: "activity" as Tab, label: "Activity log" }] : []),
     { id: "general", label: "General" },
     { id: "access", label: "Access" },
   ];
@@ -31,7 +33,7 @@ export default function SettingsPage() {
             <EmptyState
               icon={<NavIcon name="gear" />}
               title={tab === "general" ? "General settings are built in Phase 5" : "Access settings are built in Phase 5"}
-              body={tab === "general" ? "Organization details and date format." : "Roles, permissions and user access."}
+              body={tab === "general" ? "Company name, logo and colours, and date format. The time zone is under Locations & GPS → Attendance rules." : "Custom permission sets. Roles are already assigned per person on their Employees profile."}
             />
           </GlassCard>
         ) : preview ? (
@@ -41,7 +43,7 @@ export default function SettingsPage() {
         ) : (
           <>
             <SettingsAccessNote />
-            {tab === "locations" ? <LocationsPanel /> : tab === "assignments" ? <AssignmentsPanel /> : <VerificationHistory />}
+            {tab === "locations" ? <LocationsPanel /> : tab === "assignments" ? <AssignmentsPanel /> : tab === "activity" ? <ActivityLog /> : <VerificationHistory />}
           </>
         )}
       </div>

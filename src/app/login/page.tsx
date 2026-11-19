@@ -17,6 +17,7 @@ const ERRORS: Record<string, string> = {
   "signed-out": "You were signed out in another tab. Sign in again.",
   server: "Couldn't reach the server. Check your internet and try again.",
   "wait-minute": "A reset link was sent a moment ago. Wait a minute before asking again.",
+  "not-linked": "This login isn't linked to an employee record yet. Ask your HR team to add you with this exact e-mail address.",
 };
 
 export default function LoginPage() {
@@ -35,11 +36,20 @@ function Login() {
   const [forgot, setForgot] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const configured = isConfigured();
+  // Company sign-in address: /login?company=acme shows that company's name and logo.
+  const [brand, setBrand] = useState<{ name: string; app_name: string | null; logo_url: string | null } | null>(null);
+  const slug = params.get("company");
+  useEffect(() => {
+    if (!configured || !slug) return;
+    supabase()
+      .rpc("company_brand", { p_slug: slug })
+      .then(({ data }) => setBrand(Array.isArray(data) && data[0] ? data[0] : null));
+  }, [configured, slug]);
 
   useEffect(() => {
     if (!configured) return;
     supabase().auth.getSession().then(({ data }) => {
-      if (data.session && params.get("error") !== "inactive") router.replace("/");
+      if (data.session && !["inactive", "not-linked"].includes(params.get("error") ?? "")) router.replace("/");
     });
   }, [configured, router, params]);
 
@@ -58,11 +68,12 @@ function Login() {
       const code = (err as { code?: string } | null)?.code;
       return setError(code === "invalid_credentials" ? "invalid" : code === "email_not_confirmed" ? "unconfirmed" : "server");
     }
-    const { data: me } = await sb.from("employees").select("active").eq("id", data.user.id).maybeSingle();
+    // The login must be linked to an active employee record (linked by confirmed e-mail).
+    const { data: me } = await sb.from("employees").select("active").eq("user_id", data.user.id).maybeSingle();
     if (!me?.active) {
       await sb.auth.signOut({ scope: "local" });
       setBusy(false);
-      return setError("inactive");
+      return setError(me ? "inactive" : "not-linked");
     }
     router.replace("/");
   }
@@ -85,10 +96,15 @@ function Login() {
       <div className="auth-theme"><ThemeToggle /></div>
       <div className="card glass elevated auth-card">
         <div className="auth-brand">
-          <BrandMark />
+          {brand?.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="brand-mark brand-logo" src={brand.logo_url} alt="" width={34} height={34} />
+          ) : (
+            <BrandMark />
+          )}
           <div>
-            <strong>{BRAND.appName}</strong>
-            <span className="meta block">{BRAND.company === BRAND.appName ? BRAND.tagline : BRAND.company}</span>
+            <strong>{brand ? brand.app_name || brand.name : BRAND.appName}</strong>
+            <span className="meta block">{brand ? (brand.app_name ? brand.name : BRAND.tagline) : BRAND.tagline}</span>
           </div>
         </div>
         {!configured ? (

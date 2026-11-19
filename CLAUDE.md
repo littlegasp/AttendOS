@@ -21,6 +21,16 @@ functions for anything that must be trusted (server time, geofence, duplicates, 
 - No fake data in finished features. Placeholders say which phase builds them.
 - GPS is sensitive: capture only during check-in/out, validate on the server, never track in the background.
 - Keep `public/_headers` (geolocation allowed for this site only).
+- **Multi-tenant (from migration 0003):** one Supabase project serves every company. Every table carries
+  `company_id` (or reaches it through `employee_id`), and row level security keeps each company to its own
+  rows. New tables must do the same: `company_id ... default public.my_company()`, policies through
+  `my_company()` / `can_see()` / `hr_of()`, `check_company_refs` on every foreign key to company data,
+  `freeze_company_id`, and an audit trigger if HR/Admin change it. Branding lives in `companies`, not code.
+- Time is per company (`companies.timezone`, default Asia/Kolkata): use `local_today(company)` and
+  `at_local(company, date, time)`, never the server's time zone.
+- Employees are records first; a login is linked later by confirmed e-mail. Never key data on `auth.uid()`
+  directly — use `my_employee_id()`.
+- Deployment requirements (Auth settings, maps, address search): `docs/DEPLOYMENT.md`.
 
 ## Checks before pushing
 `npm run check` (tsc + eslint + tests), `npm run test:db` when SQL changes (needs a local Postgres:

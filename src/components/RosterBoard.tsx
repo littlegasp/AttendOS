@@ -74,7 +74,7 @@ function ShiftLine({ shift, changed }: { shift: Shift | undefined; changed: bool
  * (start, end, break, grace). Others see their permitted rows read-only.
  */
 export function RosterBoard() {
-  const { role } = useSession();
+  const { role, companyId } = useSession();
   const canEdit = role === "admin" || role === "hr";
   const [monday, setMonday] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -85,7 +85,7 @@ export function RosterBoard() {
   const week = monday ?? "";
   const { data, error, loading, reload } = useLoad<Data>(async () => {
     const sb = supabase();
-    const org = must(await sb.from("organization").select("timezone, max_accuracy_m, remote_location_required, default_work_mode, weekly_off, default_shift_id").single<Org>());
+    const org = must(await sb.from("companies").select("timezone, max_accuracy_m, remote_location_required, default_work_mode, weekly_off, default_shift_id").eq("id", companyId!).single<Org>());
     const start = monday ?? mondayOf(todayIn(org.timezone));
     if (!monday) setMonday(start);
     const end = addDays(start, 6);

@@ -156,7 +156,7 @@ function TeamDashboard() {
         <SectionCard title="By department" subtitle="Attended out of those due so far">
           <DepartmentBars rows={s.by_department} />
           {s.by_department.length === 1 && s.by_department[0]!.department === "No department" ? (
-            <p className="meta dept-note">Everyone is under “No department” until people are placed in departments (Employees module, Phase 3).</p>
+            <p className="meta dept-note">People without a department are counted under “No department” — set it in Employees → Edit details.</p>
           ) : null}
         </SectionCard>
       </div>
