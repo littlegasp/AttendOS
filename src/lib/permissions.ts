@@ -32,7 +32,10 @@ export type Capability =
   | "verificationHistory"
   | "manageEmployees"
   | "assignRoles"
-  | "viewAudit";
+  | "viewAudit"
+  | "manageLeave"
+  | "decideLeave"
+  | "exportReports";
 
 export const ROLES: { id: Role; label: string }[] = [
   { id: "admin", label: "Admin" },
@@ -63,6 +66,9 @@ export const MATRIX: Record<Capability, Record<Role, Scope>> = {
   manageEmployees: { admin: "all", hr: "all", manager: "none", employee: "none" }, // add/edit people, departments, designations
   assignRoles: { admin: "all", hr: "none", manager: "none", employee: "none" },
   viewAudit: { admin: "all", hr: "all", manager: "none", employee: "none" },
+  manageLeave: { admin: "all", hr: "all", manager: "none", employee: "none" }, // leave types, balance adjustments, record leave for someone
+  decideLeave: { admin: "all", hr: "all", manager: "team", employee: "none" },
+  exportReports: { admin: "all", hr: "all", manager: "team", employee: "own" }, // exports follow the same scope as the screen
 };
 
 export function scopeOf(role: Role, cap: Capability): Scope {
@@ -90,3 +96,30 @@ export const SCOPE_LABEL: Record<Scope, string> = {
 export function roleLabel(role: Role): string {
   return ROLES.find((r) => r.id === role)?.label ?? role;
 }
+
+/** Plain names for the capabilities (design page, Roles & Permissions). */
+export const CAP_LABEL: Record<Capability, string> = {
+  dashboard: "Organization dashboard",
+  personalAttendance: "Personal attendance",
+  allAttendance: "All attendance records",
+  teamAttendance: "Team attendance",
+  employees: "Employee directory",
+  leave: "Leave requests",
+  shifts: "Shift configuration",
+  holidays: "Holidays",
+  reports: "Reports",
+  departments: "Departments",
+  settings: "Policies / settings",
+  roles: "Roles / permissions",
+  manageLocations: "Offices, assigned office, remote exceptions",
+  editPolicy: "Company attendance rules",
+  manageShifts: "Shifts, roster, holidays",
+  approveCorrections: "Approve attendance corrections",
+  verificationHistory: "Location verification history",
+  manageEmployees: "Add / edit people, departments, designations",
+  assignRoles: "Assign roles",
+  viewAudit: "Activity (audit) log",
+  manageLeave: "Leave types & balances",
+  decideLeave: "Approve leave",
+  exportReports: "Export reports",
+};

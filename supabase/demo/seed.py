@@ -113,6 +113,24 @@ w(f"""insert into attendance_attempts (employee_id,kind,at,reason,accuracy_m,dis
 ('{U('d4')}','in',{AT(0,'09:47')},'accuracy_low',162,null),
 ('{U('e2')}','in',{AT(2,'07:01')},'outside_area',35,640),
 ('{U('f6')}','in',{AT(1,'09:40')},'location_required',null,null);""")
+# leave (Phase 4): a mix of approved, pending, rejected and a half day; one balance adjustment
+def LV(code,typ,a,b,half,reason,status,by,note=None):
+    hh="null" if half is None else f"'{half}'"
+    nn="null" if note is None else "'"+note.replace("'","''")+"'"
+    dec=f"'{U(by)}', now() - interval '1 day'" if status!='pending' else "null, null"
+    w(f"""insert into leave_requests (employee_id,leave_type_id,start_date,end_date,half_day,days,reason,status,requested_by,decided_by,decided_at,decision_note,requested_at)
+select '{U(code)}', t.id, {TODAY}+({a}), {TODAY}+({b}), {hh}, leave_days('{U(code)}', {TODAY}+({a}), {TODAY}+({b}), {hh}), '{reason.replace(chr(39),chr(39)*2)}', '{status}', '{U(code)}', {dec}, {nn}, now() - interval '2 days'
+  from leave_types t where t.company_id = '{CA}' and t.code = '{typ}' and leave_days('{U(code)}', {TODAY}+({a}), {TODAY}+({b}), {hh}) > 0;""")
+w(f"delete from attendance_events where employee_id in ('{U('c9')}') and work_date = {TODAY};")
+w(f"delete from attendance_events where employee_id = '{U('d1')}' and work_date between {TODAY}-11 and {TODAY}-9;")
+LV("c9","SL",0,0,None,"Fever, doctor advised rest","approved","b2")
+LV("d1","CL",-11,-9,None,"Sister's wedding","approved","a1")
+LV("f3","SL",-3,-3,"first","Dentist appointment","approved","b2")
+LV("d4","CL",7,9,None,"Family function in Pune","pending","d4")
+LV("a7","EL",14,18,None,"Annual vacation","pending","a7")
+LV("e5","CL",4,4,None,"Personal work","rejected","c3","Quarter-end review that day; please pick another date")
+w(f"insert into leave_adjustments (employee_id,leave_type_id,year_start,days,reason,created_by) select '{U('d4')}', id, leave_year_start('{CA}', {TODAY}), 2, 'Carried over from last year', '{U('b2')}' from leave_types where company_id = '{CA}' and code = 'CL';")
+w(f"update companies set full_day_minutes = 300 where id = '{CA}';")
 # a second company that must never see Acme's data
 w("select create_company('Beta Logistics','beta','Europe/London','bina@beta.co','Bina Owner');")
 w("insert into locations (company_id,name,address,lat,lng,radius_m) select id,'Beta HQ','Westminster, London',51.5007,-0.1246,200 from companies where slug='beta';")

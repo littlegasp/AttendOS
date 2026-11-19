@@ -1,5 +1,6 @@
 "use client";
 
+import { PersonLeave } from "@/components/leave/LeaveScreens";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { EmployeeDirectory } from "@/components/employees/EmployeeDirectory";
@@ -77,6 +78,7 @@ function People() {
 }
 
 interface Profile {
+  id: string;
   emp_code: string | null;
   full_name: string;
   email: string;
@@ -134,6 +136,7 @@ function MyProfile() {
           <p className="meta privacy-note">Something wrong here? Ask HR to update it — changes are recorded.</p>
         </SectionCard>
       </div>
+      <PersonLeave employeeId={p.id} />
     </>
   );
 }

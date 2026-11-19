@@ -808,3 +808,71 @@ html[data-theme="dark"] .map .leaflet-tile-pane { filter: invert(1) hue-rotate(1
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ---------------------------------------------------------------- Phase 4: leave */
+.leave-balances { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--s3); }
+.leave-bal { display: flex; flex-direction: column; gap: 2px; padding: var(--s4); border-radius: 14px; }
+.lb-num { font-size: 26px; font-weight: 700; line-height: 1.2; color: var(--color-text); }
+.row-actions { white-space: nowrap; display: flex; gap: var(--s2); justify-content: flex-end; }
+.cal-month { min-width: 92px; text-align: center; }
+.leave-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: var(--s3); }
+.lc-head { font-size: 11px; font-weight: 600; color: var(--color-text-muted); text-align: center; padding: 2px 0; text-transform: uppercase; letter-spacing: .04em; }
+.lc-day { min-height: 78px; border: 1px solid var(--color-border); border-radius: 10px; padding: 4px 6px; display: flex; flex-direction: column; gap: 2px; background: color-mix(in srgb, var(--color-surface) 60%, transparent); overflow: hidden; }
+.lc-day.blank { border-style: dashed; opacity: .35; background: transparent; }
+.lc-day.today { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px var(--color-primary); }
+.lc-num { font-size: 12px; font-weight: 600; color: var(--color-text-2); }
+.lc-pill { display: inline-block; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 999px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+  --tone: var(--color-success); color: var(--color-text); background: color-mix(in srgb, var(--tone) 22%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent); }
+.lc-pill.pending { --tone: var(--color-warning); }
+@media (max-width: 640px) { .lc-day { min-height: 54px; padding: 2px 3px; } .lc-pill { font-size: 10px; padding: 0 3px; } }
+
+/* ---------------------------------------------------------------- Phase 4: attendance register */
+.reg-filters { display: flex; flex-direction: column; gap: var(--s2); margin-bottom: var(--s4); }
+.reg-filters .field { min-width: 160px; margin: 0; }
+.month-nav { display: flex; flex-direction: column; gap: 2px; }
+.month-nav strong { min-width: 88px; text-align: center; }
+.grow { flex: 1 1 auto; }
+.th-sort { all: unset; cursor: pointer; font: inherit; color: inherit; }
+.th-sort:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 4px; }
+.text-warning { color: var(--color-warning); font-weight: 600; }
+.month-grid-wrap { max-width: 100%; }
+.month-grid { font-size: 12px; }
+.month-grid th, .month-grid td { padding: 6px 4px; text-align: center; }
+.month-grid .mg-name { text-align: left; position: sticky; left: 0; background: var(--color-surface); z-index: 1; min-width: 150px; padding-left: var(--s3); }
+.mg-day { min-width: 26px; color: var(--color-text-muted); font-weight: 600; }
+.mg-cell { font-weight: 700; border-radius: 6px; --tone: transparent; background: color-mix(in srgb, var(--tone) 16%, transparent); color: var(--tone); }
+.mg-cell.st-present, .mg-cell.st-working, .mg-cell.st-on_break { --tone: var(--color-success); }
+.mg-cell.st-late, .mg-cell.st-missing_checkout { --tone: var(--color-warning); }
+.mg-cell.st-absent { --tone: var(--color-danger); }
+.mg-cell.st-on_leave, .mg-cell.st-holiday { --tone: var(--color-info); }
+.mg-cell.st-off, .mg-cell.st-not_started, .mg-cell.st-scheduled { --tone: var(--color-text-muted); }
+.mg-legend { margin-top: var(--s2); }
+
+/* ---------------------------------------------------------------- Phase 5: reports and analytics */
+.chart { margin: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.chart svg { width: 100%; height: 220px; overflow: visible; }
+.ch-grid { stroke: var(--color-border); stroke-width: 1; stroke-dasharray: 3 4; }
+.ch-axis { fill: var(--color-text-muted); font-size: 11px; }
+.ch-line { fill: none; stroke: var(--tone, var(--color-primary)); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.ch-dot { fill: var(--color-surface); stroke: var(--tone, var(--color-primary)); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart-table summary { cursor: pointer; font-size: 12px; color: var(--color-text-2); }
+.chart-table[open] summary { margin-bottom: var(--s2); }
+.bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+.bar-list li { display: grid; grid-template-columns: minmax(90px, 160px) 1fr auto; gap: var(--s3); align-items: center; font-size: 13px; }
+.bl-track { height: 10px; border-radius: 5px; background: var(--hover); overflow: hidden; }
+.bl-fill { display: block; height: 100%; border-radius: 5px; background: var(--color-primary); }
+.bl-value { font-weight: 600; min-width: 64px; text-align: right; }
+.report-kpis { margin-bottom: var(--s4); }
+.report-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.range-fields { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: flex-end; }
+.range-fields .field { min-width: 150px; margin: 0; }
+@media print {
+  .sidebar, .app-header, .tabbar, .preview-banner, .no-print, .tabs, .skip-link, .toaster, .breadcrumbs { display: none !important; }
+  .shell, .workspace, .main { display: block !important; margin: 0 !important; padding: 0 !important; }
+  body, .main { background: #fff !important; color: #000 !important; }
+  .glass, .card { box-shadow: none !important; backdrop-filter: none !important; background: #fff !important; border: 1px solid #ccc !important; color: #000 !important; }
+  .table th, .table td { color: #000 !important; }
+  .print-only { display: block !important; }
+}
+.print-only { display: none; }
+.accent-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; border: 1px solid var(--color-border); }

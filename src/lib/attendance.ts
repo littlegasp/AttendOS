@@ -38,7 +38,8 @@ export type DayStatus =
   | "not_started"
   | "off"
   | "holiday"
-  | "scheduled";
+  | "scheduled"
+  | "on_leave";
 
 export interface Today {
   ok: true;
@@ -61,6 +62,8 @@ export interface Today {
   open_since: string | null;
   summary: { worked_min: number; break_min: number; late_min: number; early_min: number; overtime_min: number; status: DayStatus; pending_correction: boolean };
   events: AttendanceEvent[];
+  /** Approved leave on this work date (from Phase 4). */
+  leave?: { id: number; type: string; half_day: "first" | "second" | null; start: string; end: string } | null;
 }
 
 /** One row of attendance_history(): a worked-out day. */
@@ -255,10 +258,11 @@ export const STATUS_LABEL: Record<DayStatus, string> = {
   off: "Day off",
   holiday: "Holiday",
   scheduled: "Scheduled",
+  on_leave: "On leave",
 };
 
 /** Which badge style each day status uses (text is always shown too). */
-export const STATUS_BADGE: Record<DayStatus, "present" | "late" | "absent" | "pending" | "holiday" | "weekly-off" | "verified" | "failed"> = {
+export const STATUS_BADGE: Record<DayStatus, "present" | "late" | "absent" | "pending" | "holiday" | "weekly-off" | "verified" | "failed" | "leave"> = {
   present: "present",
   late: "late",
   working: "verified",
@@ -269,6 +273,7 @@ export const STATUS_BADGE: Record<DayStatus, "present" | "late" | "absent" | "pe
   off: "weekly-off",
   holiday: "holiday",
   scheduled: "weekly-off",
+  on_leave: "leave",
 };
 
 export const CORRECTION_KIND_LABEL: Record<string, string> = {

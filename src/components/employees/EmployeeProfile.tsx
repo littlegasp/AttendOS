@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { HistoryPanel } from "@/components/HistoryPanel";
+import { PersonLeave } from "@/components/leave/LeaveScreens";
 import { Modal } from "@/components/Modal";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Button, FormSelect, GlassCard, SectionCard, StatusBadge } from "@/components/ui";
@@ -167,6 +168,7 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
       </div>
 
       <HistoryPanel employeeId={e.id} tz={company?.timezone ?? "Asia/Kolkata"} days={14} canRequest={false} />
+      <PersonLeave employeeId={e.id} />
 
       {manage ? (
         <SectionCard title="Change history" subtitle="Who changed this record, and what changed">

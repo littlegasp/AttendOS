@@ -22,6 +22,32 @@ export interface Summary {
   pending_corrections: { id: number; name: string; work_date: string; kind: string; requested_in: string | null; requested_out: string | null; reason: string; requested_at: string; can_decide: boolean }[];
   upcoming_holidays: { day: string; name: string; location: string | null }[];
   recent_activity: { name: string; kind: string; at: string; work_mode: string; location: string | null; source: string }[];
+  on_leave_today?: number;
+  on_leave?: { name: string; type: string; half_day: string | null; end: string }[];
+  pending_leave?: { id: number; name: string; type: string; start: string; end: string; days: number; half_day: string | null; reason: string; can_decide: boolean }[];
+}
+
+/** Who is on leave today and requests waiting for a decision (decisions are made in Leave Management). */
+export function LeaveToday({ s }: { s: Summary }) {
+  const on = s.on_leave ?? [];
+  const pending = (s.pending_leave ?? []).filter((p) => p.can_decide);
+  return (
+    <div className="stack">
+      {on.length === 0 ? <p className="meta">No one is on leave today.</p> : (
+        <ul className="people-list">
+          {on.map((p, i) => (
+            <li key={i}><strong>{p.name}</strong> <span className="meta">· {p.type}{p.half_day ? " (half day)" : ""}{p.end > s.today ? ` · back after ${p.end.slice(8)}/${p.end.slice(5, 7)}` : ""}</span></li>
+          ))}
+        </ul>
+      )}
+      {pending.length ? (
+        <p className="meta">
+          <strong>{pending.length}</strong> leave {pending.length === 1 ? "request is" : "requests are"} waiting for your decision.{" "}
+          <Link href="/leave">Review in Leave Management</Link>
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 /** Order and colour (via tone classes) of the attendance distribution. */
@@ -33,6 +59,7 @@ const DIST: { key: DayStatus; tone: string }[] = [
   { key: "missing_checkout", tone: "danger-soft" },
   { key: "absent", tone: "danger" },
   { key: "not_started", tone: "neutral" },
+  { key: "on_leave", tone: "info" },
   { key: "holiday", tone: "info-soft" },
   { key: "off", tone: "neutral-soft" },
 ];

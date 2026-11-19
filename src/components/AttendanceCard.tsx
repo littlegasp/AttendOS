@@ -27,6 +27,7 @@ function NowBadge({ t }: { t: Today }) {
   if (t.state === "on_break") return <StatusBadge status="pending" label="On break" />;
   if (t.events.length) return <StatusBadge status="weekly-off" label="Checked out" />;
   if (t.plan.work_mode === "off") return <StatusBadge status="holiday" label={t.plan.source === "holiday" ? "Holiday" : "Day off"} />;
+  if (t.leave && !t.leave.half_day) return <StatusBadge status="leave" label="On leave" />;
   return <StatusBadge status="pending" label="Not checked in" />;
 }
 
@@ -38,7 +39,8 @@ export function AttendanceCard({ att, compact = false }: { att: Att; compact?: b
   const { today: t, step, problem, act, serverNow } = att;
   if (!t) return null;
   const tz = t.timezone;
-  const off = t.plan.work_mode === "off";
+  const fullLeave = Boolean(t.leave && !t.leave.half_day);
+  const off = t.plan.work_mode === "off" || fullLeave;
   const busy = step !== "idle";
   const { worked, brk } = timeSplit(t.events, serverNow);
   const lastIn = [...t.events].reverse().find((e) => e.kind === "in");
@@ -70,7 +72,7 @@ export function AttendanceCard({ att, compact = false }: { att: Att; compact?: b
         ) : null}
         <span className="meta">
           {SOURCE_LABEL[t.plan.source]}
-          {t.plan.note ? ` · ${t.plan.note}` : ""}
+          {t.plan.note && !t.leave ? ` · ${t.plan.note}` : ""}
           {t.work_date !== t.today ? ` · counts for ${t.work_date}` : ""}
         </span>
       </div>
@@ -92,7 +94,11 @@ export function AttendanceCard({ att, compact = false }: { att: Att; compact?: b
             </Button>
           </div>
         )}
-        {off && t.state === "off" ? (
+        {t.leave ? (
+          <p className="meta">
+            {t.leave.half_day ? `Half-day ${t.leave.type} leave (${t.leave.half_day === "first" ? "first" : "second"} half) — you can still check in for the other half.` : `You're on approved ${t.leave.type} leave today. To work instead, cancel it under Leave Management (or ask HR).`}
+          </p>
+        ) : off && t.state === "off" ? (
           <p className="meta">
             {t.plan.source === "holiday" ? `Holiday: ${t.plan.note}.` : "Today is not a working day on your roster."} If you&apos;ve been asked to work, ask HR to update it.
           </p>

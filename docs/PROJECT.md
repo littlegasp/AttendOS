@@ -172,5 +172,58 @@ Review screenshots: real app, real local PostgreSQL + PostgREST with row level s
 instead of Supabase Auth, sample companies (Acme Industries, Beta Logistics), offline map tiles. Sign-in
 screenshots: real Supabase Auth server, real PostgREST, local mail catcher, fresh database.
 
-## Next — Phase 4 (do not start until Phase 3 is approved)
-Leave management, Attendance Register (daily/monthly, export within scope), shift/late rules polish.
+## Phase 4 — leave and attendance register (done, awaiting full-system review)
+Migration `0006_leave_register_reports.sql` (shared with Phase 5), tests `supabase/tests/leave_reports_test.sql`.
+- **Leave types** per company (defaults Casual 12, Sick 8, Earned 15, Unpaid no limit; new companies get them
+  automatically): yearly days, paid/unpaid, approval needed or automatic, half days allowed, how far back people
+  may apply. HR/Admin manage them; never deleted.
+- **Requests** only through checked functions: `apply_leave` (days counted by the server from the person's roster
+  and holidays; no overlap; no full day where they already checked in; enough balance; within the leave year;
+  not before joining or after the last day; backdating limit), `decide_leave` (their manager or HR; never your
+  own; reject needs a reason; balance re-checked), `cancel_leave` (own pending, own approved before it starts,
+  HR any), `adjust_leave` (HR, opening balances / carry-over, not their own). HR can **record leave** for
+  someone (approved at once, marked "Recorded by HR"). `leave_preview` shows days, balance and conflicts before
+  submitting. Leave year start month is a company setting.
+- **Leave in attendance:** an approved leave day shows as **On leave** (not absent) in history, register, dashboard
+  and reports; check-in on a full day of leave is refused with a message; My Attendance shows the leave.
+- **Screens:** Leave Management → My Leaves (balance + requests), Team Requests / Requests (approve, reject with
+  reason, cancel, Record leave), Leave Balance (any visible person; HR adjustments), Leave Calendar (month grid +
+  table), Leave Types (HR/Admin). Dashboard: **On leave** KPI and "Leave today" with requests to decide.
+  Employee profile and My profile show balance and recent leave.
+- **Attendance Register:** Daily, Monthly (grid with letters P/L/A/LV/H/O, totals) and Employee detail views;
+  filters for department, employee, shift and status (remembered on the device); sortable columns; paging;
+  **Export CSV** of exactly what the view shows (same database function, same scope). Managers see their team,
+  HR/Admin everyone; employees use My Attendance → History.
+
+## Phase 5 — reports, analytics, roles, settings (done, awaiting full-system review)
+- `report_days` (one scope for register, reports and exports, ≤ 93 days), `report_people`, `report_trend`.
+- **Reports:** Summary (attendance rate on due days only, average hours per completed day, late arrivals, early
+  departures, absenteeism, overtime, half days, leave), Employee-wise, Department-wise, Late arrivals, Overtime,
+  Leave, Daily. Filters: period presets or custom range, department, employee, shift. **Export CSV** per report
+  and **Print / PDF** (print layout hides the app shell). CSV cells can't start a spreadsheet formula.
+- **Analytics:** attendance trend, working-hours trend, status distribution, department comparison — each with a
+  text summary and "Show as table".
+- **Roles & Permissions (Admin):** the role matrix from `permissions.ts` (enforced again by the database) and
+  **User access**: everyone's role, access on/off, login linked / e-mail confirmed, last sign-in (`user_access()`,
+  Admin only). Role changes stay on the profile.
+- **Settings → General** (Admin edits, HR reads): company name, app name, logo, accent colours, date format,
+  time zone (edited in Attendance rules), **half-day rule** (minimum hours for a full day, used in reports) and
+  **leave year start**. **Settings → Access:** user access + role matrix.
+- Speed: day calculations are now made once per person-day (`(f()).*` was calling them once per column):
+  register ~13× faster, dashboard ~5× faster.
+
+## Phase 6 — QA (19 Nov 2026)
+- `npm run test:db` **308** database checks (6 suites); `npm run check` **35** app checks + type-check + lint;
+  production build; real sign-in check **29/29** against Supabase Auth with migrations 0001–0006.
+- Every screen captured with the real app and database in dark, light and phone layouts; no console errors.
+
+### Known limits after Phase 6
+- Not on a real Supabase project yet (see `docs/DEPLOYMENT.md`); invitations, SMTP and map provider pending.
+- Reports and the register calculate days live: about 1 ms per person-day locally (100 people × 31 days ≈ 3 s).
+  Larger companies will need a nightly summary table — a later change.
+- Excel export is CSV (opens in Excel); PDF is the browser's print-to-PDF. No scheduled/e-mailed reports.
+- Leave: no accrual per month, no carry-forward rules (HR adjusts balances), no attachments (needs the private
+  storage planned in `docs/EMPLOYEE-DOCUMENTS.md`), no notifications/e-mails on decisions.
+- Shift templates per department and bulk shift assignment by group are not built (per person + weekly pattern).
+- No Help guide inside the app yet (studio-crm has one; worth adding before go-live).
+- Employee Documents: planned, not built.

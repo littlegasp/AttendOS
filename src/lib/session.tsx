@@ -25,6 +25,7 @@ export interface Company {
   logo_url: string | null;
   accent_dark: string | null;
   accent_light: string | null;
+  date_format?: string;
 }
 
 export interface Session {
@@ -83,7 +84,7 @@ export async function signOut(reason?: string) {
   window.location.replace(reason ? `/login?error=${reason}` : "/login");
 }
 
-const COLS = "id, full_name, email, role, active, company_id, company:companies(id, name, slug, timezone, app_name, logo_url, accent_dark, accent_light)";
+const COLS = "id, full_name, email, role, active, company_id, company:companies(id, name, slug, timezone, app_name, logo_url, accent_dark, accent_light, date_format)";
 
 async function loadEmployee(userId: string): Promise<EmployeeRow | null> {
   const { data, error } = await supabase().from("employees").select(COLS).eq("user_id", userId).maybeSingle<EmployeeRow>();

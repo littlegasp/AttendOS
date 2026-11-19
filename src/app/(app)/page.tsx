@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AttendanceCard, VerificationCard } from "@/components/AttendanceCard";
 import { PendingCorrections } from "@/components/Corrections";
-import { Activity, DepartmentBars, Distribution, Holidays, MyStrip, PeopleList, type Summary } from "@/components/DashboardWidgets";
+import { Activity, DepartmentBars, Distribution, Holidays, LeaveToday, MyStrip, PeopleList, type Summary } from "@/components/DashboardWidgets";
 import { HistoryPanel } from "@/components/HistoryPanel";
 import { NavIcon } from "@/components/Icons";
 import { PageContainer } from "@/components/PageContainer";
@@ -147,6 +147,7 @@ function TeamDashboard() {
         <MetricCard label="Working now" tone="info" icon={<NavIcon name="clock" />} value={`${s.working_now.length}`} note={`${s.working_now.filter((w) => w.on_break).length} on break`} />
         <MetricCard label="Late today" tone="warning" icon={<NavIcon name="clock" />} value={`${s.late_today}`} note="Checked in after shift start + grace" />
         <MetricCard label="Not checked in" tone="danger" icon={<NavIcon name="people" />} value={`${overdue}`} note={`${s.not_checked_in.length - overdue} not due yet`} />
+        <MetricCard label="On leave" tone="info" icon={<NavIcon name="leave" />} value={`${s.on_leave_today ?? 0}`} note={`${(s.pending_leave ?? []).filter((p) => p.can_decide).length} requests to decide`} href="/leave" />
       </div>
 
       <div className="grid-2">
@@ -169,6 +170,10 @@ function TeamDashboard() {
           <PeopleList rows={s.not_checked_in} empty="Everyone due has checked in" tz={tz} kind="missing" />
         </SectionCard>
       </div>
+
+      <SectionCard title="Leave today" subtitle={`${s.on_leave_today ?? 0} on approved leave`}>
+        <LeaveToday s={s} />
+      </SectionCard>
 
       <div className="grid-3">
         <SectionCard title="Pending corrections" subtitle={s.scope === "team" ? "From your team" : "Awaiting a decision"}>

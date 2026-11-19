@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
+import { GeneralSettings, RoleMatrix, UserAccess } from "@/components/AccessScreens";
 import { ActivityLog } from "@/components/ActivityLog";
 import { NavIcon } from "@/components/Icons";
 import { AssignmentsPanel, LocationsPanel, SettingsAccessNote, VerificationHistory } from "@/components/LocationsPanel";
@@ -29,13 +31,21 @@ export default function SettingsPage() {
       <Tabs label="Settings" value={tab} onChange={setTab} tabs={tabs} />
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
         {tab === "general" || tab === "access" ? (
-          <GlassCard>
-            <EmptyState
-              icon={<NavIcon name="gear" />}
-              title={tab === "general" ? "General settings are built in Phase 5" : "Access settings are built in Phase 5"}
-              body={tab === "general" ? "Company name, logo and colours, and date format. The time zone is under Locations & GPS → Attendance rules." : "Custom permission sets. Roles are already assigned per person on their Employees profile."}
-            />
-          </GlassCard>
+          preview ? (
+            <GlassCard>
+              <EmptyState icon={<NavIcon name="gear" />} title="This needs the company database" body="Once connected: company details, branding, date format, the half-day rule and leave year (General); roles and who can sign in (Access)." />
+            </GlassCard>
+          ) : tab === "general" ? (
+            <div className="stack">
+              <GeneralSettings />
+              <p className="meta">Shifts and weekly offs: <Link href="/shifts">Shifts &amp; Schedules</Link> · Holidays: <Link href="/holidays">Holidays</Link> · Leave types: <Link href="/leave">Leave Management</Link></p>
+            </div>
+          ) : (
+            <div className="stack">
+              <UserAccess />
+              <RoleMatrix />
+            </div>
+          )
         ) : preview ? (
           <GlassCard>
             <EmptyState icon={<NavIcon name="department" />} title="This needs the company database" body="Once connected, HR and Admin manage offices on a map, each person's assigned office and shift, remote-work exceptions and the verification history here. Company rules stay Admin-only." />

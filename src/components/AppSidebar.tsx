@@ -123,7 +123,7 @@ export function AppSidebar() {
           <span className="nav-ic"><NavIcon name="dashboard" /></span>
           <span className="nav-tx">Design system</span>
         </Link>
-        <span className="nav-tx tiny muted foot-ver">v0.4 · Phase 3</span>
+        <span className="nav-tx tiny muted foot-ver">v0.5 · Phases 4–5</span>
       </div>
     </nav>
   );

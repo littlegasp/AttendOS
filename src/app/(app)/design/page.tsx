@@ -6,33 +6,12 @@ import { NavIcon } from "@/components/Icons";
 import { PageContainer } from "@/components/PageContainer";
 import { EmptyState, ErrorState, LoadingState, PermissionDenied } from "@/components/States";
 import { Button, DateInput, FormInput, FormSelect, FormTextarea, GlassCard, MetricCard, SectionCard, StatusBadge, type AttendanceStatus } from "@/components/ui";
-import { MATRIX, ROLES, SCOPE_LABEL, type Capability } from "@/lib/permissions";
+import { CAP_LABEL, MATRIX, ROLES, SCOPE_LABEL, type Capability } from "@/lib/permissions";
 import { toast } from "@/lib/toast";
 
 const SWATCHES = ["bg", "surface", "elevated", "border", "primary", "secondary", "success", "info", "warning", "danger", "text", "text-2", "text-muted"];
 const STATUSES: AttendanceStatus[] = ["present", "late", "absent", "leave", "pending", "approved", "rejected", "verified", "failed", "half-day", "holiday", "weekly-off"];
-const CAP_LABEL: Record<Capability, string> = {
-  dashboard: "Organization dashboard",
-  personalAttendance: "Personal attendance",
-  allAttendance: "All attendance records",
-  teamAttendance: "Team attendance",
-  employees: "Employee directory",
-  leave: "Leave requests",
-  shifts: "Shift configuration",
-  holidays: "Holidays",
-  reports: "Reports",
-  departments: "Departments",
-  settings: "Policies / settings",
-  roles: "Roles / permissions",
-  manageLocations: "Offices, assigned office, remote exceptions",
-  editPolicy: "Company attendance rules",
-  manageShifts: "Shifts, roster, holidays",
-  approveCorrections: "Approve attendance corrections",
-  verificationHistory: "Location verification history",
-  manageEmployees: "Add / edit people, departments, designations",
-  assignRoles: "Assign roles",
-  viewAudit: "Activity (audit) log",
-};
+
 
 /** Living reference for the Phase 1 design system. Sample values here are labelled as examples. */
 export default function DesignPage() {
