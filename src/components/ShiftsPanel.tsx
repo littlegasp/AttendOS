@@ -15,14 +15,14 @@ import { Button, FormInput, FormSelect, SectionCard, StatusBadge } from "./ui";
 
 /** Shift definitions: name, start, end, break, grace. Overnight when the end is at or before the start. */
 export function ShiftsPanel() {
-  const { role } = useSession();
+  const { role, companyId } = useSession();
   const canEdit = can(role, "manageShifts");
   const canDefault = can(role, "editPolicy");
   const { data, error, reload } = useLoad(async () => {
     const sb = supabase();
     const [shifts, org] = await Promise.all([
       sb.from("shifts").select("*").order("start_time").then(must<Shift[]>),
-      sb.from("organization").select("default_shift_id").single<{ default_shift_id: string | null }>().then(must<{ default_shift_id: string | null }>),
+      sb.from("companies").select("default_shift_id").eq("id", companyId!).single<{ default_shift_id: string | null }>().then(must<{ default_shift_id: string | null }>),
     ]);
     return { shifts, org };
   }, "shifts");
@@ -34,7 +34,7 @@ export function ShiftsPanel() {
 
   async function setDefault(id: string) {
     setSavingDefault(true);
-    const { error: e } = await supabase().from("organization").update({ default_shift_id: id || null }).eq("id", 1);
+    const { error: e } = await supabase().from("companies").update({ default_shift_id: id || null }).eq("id", companyId!);
     setSavingDefault(false);
     if (e) return toast({ tone: "danger", title: "Not saved", body: friendlyError(e) });
     toast({ tone: "success", title: "Company default shift saved" });

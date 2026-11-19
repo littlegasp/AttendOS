@@ -29,6 +29,9 @@ const CAP_LABEL: Record<Capability, string> = {
   manageShifts: "Shifts, roster, holidays",
   approveCorrections: "Approve attendance corrections",
   verificationHistory: "Location verification history",
+  manageEmployees: "Add / edit people, departments, designations",
+  assignRoles: "Assign roles",
+  viewAudit: "Activity (audit) log",
 };
 
 /** Living reference for the Phase 1 design system. Sample values here are labelled as examples. */

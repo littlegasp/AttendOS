@@ -517,6 +517,7 @@ fieldset:disabled .input { opacity: .7; }
 /* ---------- auth screens ---------- */
 .center-screen { min-height: 100vh; display: grid; place-items: center; padding: var(--s5) var(--s4); position: relative; }
 .auth-card { width: min(400px, 100%); display: flex; flex-direction: column; gap: var(--s5); padding: var(--s6) var(--s5); }
+.auth-links { justify-content: space-between; flex-wrap: wrap; gap: var(--s2); }
 .auth-brand { display: flex; align-items: center; gap: var(--s3); }
 .auth-brand strong { font-size: 18px; }
 .auth-theme { position: absolute; top: var(--s4); right: var(--s4); }
@@ -753,6 +754,54 @@ html[data-theme="dark"] .map .leaflet-tile-pane { filter: invert(1) hue-rotate(1
   .rules-view { grid-template-columns: 1fr; gap: 2px; }
   .rules-view dd { margin-bottom: 8px; }
   .default-shift .field { min-width: 0; width: 100%; }
+}
+
+
+/* =========================================================================
+   Phase 3: employees, departments, activity log (same tokens and materials)
+   ========================================================================= */
+.emp-dir { display: flex; flex-direction: column; gap: var(--s4); }
+.emp-toolbar { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; }
+.emp-search { flex: 1 1 320px; }
+.emp-filters { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.filter-chip { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 4px 0 12px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--hover); font-size: 13px; color: var(--color-text-2); }
+.filter-chip.on { border-color: var(--color-primary); background: var(--active-bg); color: var(--color-text); }
+.fc-label { font-weight: 500; }
+.filter-chip select { border: 0; background: transparent; color: var(--color-text); font: inherit; font-weight: 600; padding: 4px 6px; border-radius: 999px; cursor: pointer; max-width: 170px; }
+.filter-chip select:focus-visible { outline: 2px solid var(--color-primary); }
+.filter-chip select option { background: var(--color-surface); color: var(--color-text); }
+.row-link { cursor: pointer; }
+.person-cell { display: flex; align-items: center; gap: var(--s3); border: 0; background: none; padding: 0; text-align: left; color: var(--color-text); cursor: pointer; font: inherit; }
+.pc-name { font-weight: 600; }
+.person-cell:hover .pc-name { color: var(--color-primary); }
+.badge-stack { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.role-tag { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: .02em; color: var(--color-primary); background: var(--active-bg); border: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent); }
+.emp-cards { display: none; list-style: none; margin: 0; padding: 0; flex-direction: column; gap: var(--s2); }
+.emp-card { width: 100%; display: flex; align-items: center; gap: var(--s3); padding: var(--s3); border: 1px solid var(--glass-edge); border-radius: 14px; background: transparent; color: var(--color-text); text-align: left; cursor: pointer; font: inherit; }
+.emp-card:hover { background: var(--hover); }
+.ec-main { flex: 1; min-width: 0; }
+.pager { display: flex; justify-content: center; align-items: center; gap: var(--s3); }
+.back-link { align-self: flex-start; font-size: 13px; }
+.profile-head-card { display: flex; align-items: center; gap: var(--s5); flex-wrap: wrap; }
+.avatar.xl { width: 72px; height: 72px; font-size: 24px; }
+.ph-main { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ph-badges { gap: 6px; }
+.ph-actions { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.audit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.audit-list li { display: grid; grid-template-columns: 130px 1fr; gap: var(--s3); padding: 10px 0; border-bottom: 1px solid var(--glass-edge); font-size: 13px; }
+.audit-list li:last-child { border-bottom: 0; }
+.audit-when { white-space: nowrap; }
+.wrap { white-space: normal; }
+@media (max-width: 767px) {
+  .emp-table { display: none; }
+  .emp-cards { display: flex; }
+  .emp-filters { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .filter-chip { flex: none; }
+  .profile-head-card { gap: var(--s3); }
+  .avatar.xl { width: 56px; height: 56px; font-size: 18px; }
+  .ph-actions { width: 100%; }
+  .ph-actions .btn { flex: 1; }
+  .audit-list li { grid-template-columns: 1fr; gap: 2px; }
 }
 
 /* ---------- motion ---------- */

@@ -38,8 +38,8 @@ export const NAV: NavGroup[] = [
     items: [
       { href: "/", label: "Dashboard", icon: "dashboard", cap: "dashboard", phase: 5, blurb: "Today's attendance at a glance" },
       { href: "/my-attendance", label: "My Attendance", icon: "clock", cap: "personalAttendance", phase: 2, blurb: "Check in and check out with location verification" },
-      { href: "/attendance", label: "Attendance Register", icon: "register", cap: "register", phase: 3, blurb: "Daily and monthly attendance records" },
-      { href: "/employees", label: "Employees", icon: "people", cap: "employees", phase: 3, blurb: "Employee directory and profiles" },
+      { href: "/attendance", label: "Attendance Register", icon: "register", cap: "register", phase: 4, blurb: "Daily and monthly attendance records" },
+      { href: "/employees", label: "Employees", icon: "people", cap: "employees", phase: 3, blurb: "Employee directory, profiles and reporting lines" },
     ],
   },
   {
@@ -60,7 +60,7 @@ export const NAV: NavGroup[] = [
   {
     label: "Configuration",
     items: [
-      { href: "/departments", label: "Departments", icon: "department", cap: "departments", phase: 3, blurb: "Departments and department heads" },
+      { href: "/departments", label: "Departments", icon: "department", cap: "departments", phase: 3, blurb: "Departments, heads and designations" },
       { href: "/roles", label: "Roles & Permissions", icon: "shield", cap: "roles", phase: 5, blurb: "Who can see and do what" },
       { href: "/settings", label: "Settings", icon: "gear", cap: "settings", phase: 5, blurb: "Organization, attendance policy and GPS" },
     ],

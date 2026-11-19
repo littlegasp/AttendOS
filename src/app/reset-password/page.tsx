@@ -16,8 +16,11 @@ export default function ResetPasswordPage() {
 
   useEffect(() => {
     if (!isConfigured()) return setError("This copy isn't connected to a database yet.");
+    const expired = "This reset link has expired or was already used. Ask for a new one from the sign-in page.";
+    const hash = new URLSearchParams(window.location.hash.slice(1));
+    if (hash.get("error_code") || hash.get("error")) return setError(expired);
     const sb = supabase();
-    sb.auth.getSession().then(({ data }) => (data.session ? setReady(true) : setError("This reset link has expired or was already used. Ask for a new one from the sign-in page.")));
+    sb.auth.getSession().then(({ data }) => (data.session ? setReady(true) : setError(expired)));
   }, []);
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
@@ -28,10 +31,19 @@ export default function ResetPasswordPage() {
     if (pw.length < 8) return setError("Use at least 8 characters.");
     if (pw !== again) return setError("The two passwords don't match.");
     setBusy(true);
-    const { error: err } = await supabase().auth.updateUser({ password: pw });
+    const sb = supabase();
+    const { error: err } = await sb.auth.updateUser({ password: pw });
+    if (err) {
+      setBusy(false);
+      return setError(err.code === "weak_password" ? "Choose a longer password: at least 8 characters." : err.code === "same_password" ? "Choose a password different from the old one." : friendlyError(err));
+    }
+    // A new password signs out every other device; this one continues.
+    await sb.auth.signOut({ scope: "others" });
+    const { data: status } = await sb.rpc("my_account_status");
     setBusy(false);
-    if (err) return setError(friendlyError(err));
-    router.replace("/");
+    if (status === "active") return router.replace("/");
+    await sb.auth.signOut({ scope: "local" });
+    router.replace(`/login?error=${status === "inactive" ? "inactive" : "not-linked"}`);
   }
 
   return (

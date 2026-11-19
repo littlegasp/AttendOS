@@ -2,35 +2,47 @@ import datetime
 import random
 random.seed(7)
 U=lambda c: f"00000000-0000-0000-0000-0000000000{c}"
-people=[ # code, name, role, dept, office, manager
-("a1","Rohan Mehta","admin","Accounts","L1",None),
-("b2","Hema Kulkarni","hr","HR","L1",None),
-("c3","Sana Shaikh","manager","Sales","L1",None),
-("d4","Esha Patil","employee","Sales","L1","c3"),
-("e5","Rahul Menon","employee","Sales","L2","c3"),
-("f6","Kiran Rao","employee","Sales","L1","c3"),
-("a7","Meera Iyer","employee","Sales","L1","c3"),
-("b8","Vikram Desai","employee","Operations",None,None),
-("c9","Arjun Nair","employee","Operations","L2",None),
-("d1","Pooja Joshi","employee","Accounts","L1",None),
-("e2","Farhan Khan","employee","Operations","L2",None),
-("f3","Neha Gupta","employee","HR","L1",None),
+CA="cccccccc-0000-0000-0000-00000000000a"  # Acme Industries (Mumbai)
+people=[ # code, name, role, dept, office, manager, designation, joined, phone
+("a1","Rohan Mehta","admin","Accounts","L1",None,"Finance Manager","2019-04-01","+91 98200 10001"),
+("b2","Hema Kulkarni","hr","HR","L1",None,"HR Manager","2020-06-15","+91 98200 10002"),
+("c3","Sana Shaikh","manager","Sales","L1",None,"Sales Manager","2021-01-11","+91 98200 10003"),
+("d4","Esha Patil","employee","Sales","L1","c3","Sales Executive","2023-08-01","+91 98200 10004"),
+("e5","Rahul Menon","employee","Sales","L2","c3","Sales Executive","2022-02-14",None),
+("f6","Kiran Rao","employee","Sales","L1","c3","Sales Executive","2024-03-04",None),
+("a7","Meera Iyer","employee","Sales","L1","c3","Key Account Manager","2021-09-20",None),
+("b8","Vikram Desai","employee","Operations",None,None,"Logistics Coordinator","2022-11-07",None),
+("c9","Arjun Nair","employee","Operations","L2",None,"Plant Supervisor","2020-01-06",None),
+("d1","Pooja Joshi","employee","Accounts","L1","a1","Accountant","2023-05-22",None),
+("e2","Farhan Khan","employee","Operations","L2",None,"Machine Operator","2024-07-01",None),
+("f3","Neha Gupta","employee","HR","L1","b2","HR Executive","2025-02-03",None),
 ]
 L={"L1":"11111111-1111-1111-1111-111111111111","L2":"22222222-2222-2222-2222-222222222222","L3":"33333333-3333-3333-3333-333333333333"}
 S={"GEN":"aaaaaaaa-0000-0000-0000-000000000001","NIGHT":"aaaaaaaa-0000-0000-0000-000000000002","EARLY":"aaaaaaaa-0000-0000-0000-000000000003"}
-out=[]
+D={"Sales":"dddddddd-0000-0000-0000-000000000001","Operations":"dddddddd-0000-0000-0000-000000000002","Accounts":"dddddddd-0000-0000-0000-000000000003","HR":"dddddddd-0000-0000-0000-000000000004"}
+TODAY=f"local_today('{CA}')"
+def AT(n,hhmm): return f"at_local('{CA}', {TODAY}-{n}, '{hhmm}')"
+out=["-- Everything below is sample data: audit entries are marked source = seed.", "select set_config('attendos.source', 'seed', false);"]
 w=out.append
-w("update organization set name='Acme Industries', timezone='Pacific/Kiritimati', max_accuracy_m=100;")
-for code,name,role,dept,off,mgr in people:
-    w(f"insert into auth.users (id,email,raw_user_meta_data) values ('{U(code)}','{name.split()[0].lower()}@acme.in','{{\"full_name\":\"{name}\"}}');")
-w(f"insert into locations (id,name,address,lat,lng,radius_m,active) values ('{L['L1']}','Andheri HQ','Saki Vihar Rd, Andheri East, Mumbai',19.1136,72.8697,150,true),('{L['L2']}','Pune Plant','Chakan MIDC Phase II, Pune',18.7603,73.8630,250,true),('{L['L3']}','Thane Warehouse','Wagle Estate, Thane',19.1960,72.9560,200,false);")
-w(f"insert into shifts (id,name,start_time,end_time,break_minutes,grace_minutes) values ('{S['GEN']}','General','09:30','18:30',60,15),('{S['NIGHT']}','Night','22:00','06:00',45,10),('{S['EARLY']}','Early','07:00','16:00',60,10);")
-w(f"update organization set default_shift_id='{S['GEN']}';")
-for d in ["Sales","Operations","Accounts","HR"]:
-    w(f"insert into departments (name) values ('{d}');")
-for code,name,role,dept,off,mgr in people:
-    w(f"update employees set role='{role}', department_id=(select id from departments where name='{dept}'), home_location_id={'NULL' if not off else repr(L[off])}, manager_id={'NULL' if not mgr else repr(U(mgr))}, emp_code='E{100+people.index((code,name,role,dept,off,mgr))}' where id='{U(code)}';")
-w("update employees set created_at = at_local(local_today()-13, '00:00');")
+w(f"insert into companies (id,name,slug,timezone,max_accuracy_m) values ('{CA}','Acme Industries','acme','Asia/Kolkata',100);")
+w(f"insert into locations (id,company_id,name,address,lat,lng,radius_m,active) values ('{L['L1']}','{CA}','Andheri HQ','Saki Vihar Rd, Andheri East, Mumbai',19.1136,72.8697,150,true),('{L['L2']}','{CA}','Pune Plant','Chakan MIDC Phase II, Pune',18.7603,73.8630,250,true),('{L['L3']}','{CA}','Thane Warehouse','Wagle Estate, Thane',19.1960,72.9560,200,false);")
+w(f"insert into shifts (id,company_id,name,start_time,end_time,break_minutes,grace_minutes) values ('{S['GEN']}','{CA}','General','09:30','18:30',60,15),('{S['NIGHT']}','{CA}','Night','22:00','06:00',45,10),('{S['EARLY']}','{CA}','Early','07:00','16:00',60,10);")
+w(f"update companies set default_shift_id='{S['GEN']}' where id='{CA}';")
+for d,code,desc in [("Sales","SAL","Field and key-account sales"),("Operations","OPS","Plant, logistics and dispatch"),("Accounts","ACC","Billing, payables and payroll inputs"),("HR","HR","People operations")]:
+    w(f"insert into departments (id,company_id,name,code,description) values ('{D[d]}','{CA}','{d}','{code}','{desc}');")
+for g in sorted(set(p[6] for p in people)):
+    w(f"insert into designations (company_id,name) values ('{CA}','{g}');")
+for i,(code,name,role,dept,off,mgr,des,joined,phone) in enumerate(people):
+    w(f"insert into employees (id,company_id,full_name,email,role,department_id,home_location_id,emp_code,designation_id,joining_date,phone,employment_status) values ('{U(code)}','{CA}','{name}','{name.split()[0].lower()}@acme.in','{role}','{D[dept]}',{'NULL' if not off else repr(L[off])},'E{101+i:04d}',(select id from designations where company_id='{CA}' and name='{des}'),'{joined}',{'NULL' if not phone else repr(phone)},'{'probation' if joined>='2025-01-01' else 'confirmed'}');")
+for code,name,role,dept,off,mgr,des,joined,phone in people:
+    if mgr: w(f"update employees set manager_id='{U(mgr)}' where id='{U(code)}';")
+w(f"update departments set head_id='{U('c3')}' where id='{D['Sales']}'; update departments set head_id='{U('c9')}' where id='{D['Operations']}'; update departments set head_id='{U('a1')}' where id='{D['Accounts']}'; update departments set head_id='{U('b2')}' where id='{D['HR']}';")
+# a new joiner without a login yet, and someone who left
+w(f"insert into employees (id,company_id,full_name,email,role,department_id,home_location_id,emp_code,designation_id,joining_date,employment_status,manager_id) values ('{U('b5')}','{CA}','Tanvi Shah','tanvi@acme.in','employee','{D['Sales']}','{L['L1']}','E0113',(select id from designations where company_id='{CA}' and name='Sales Executive'),{TODAY}+3,'probation','{U('c3')}');")
+w(f"insert into employees (id,company_id,full_name,email,role,department_id,home_location_id,emp_code,designation_id,joining_date,employment_status,exit_date,active) values ('{U('c6')}','{CA}','Imran Sheikh','imran@acme.in','employee','{D['Operations']}','{L['L2']}','E0098',(select id from designations where company_id='{CA}' and name='Machine Operator'),'2022-03-01','exited','2026-10-31',false);")
+# logins (confirmed e-mail) → linked automatically
+for code,name,*_ in people:
+    w(f"insert into auth.users (id,email) values ('{U(code)}','{name.split()[0].lower()}@acme.in');")
 # patterns
 for wd in [1,2,3,4,5]:
     w(f"insert into roster_pattern values ('{U('b8')}',{wd},'remote',NULL);")
@@ -40,20 +52,20 @@ for wd in [1,2,3,4,5,6]:
     w(f"insert into roster_pattern values ('{U('c9')}',{wd},'office','{L['L2']}');")
 w(f"update employees set default_shift_id='{S['EARLY']}' where id='{U('e2')}';")
 w(f"insert into roster_pattern values ('{U('d4')}',3,'remote',NULL);")  # Esha WFH Wednesdays
-w(f"insert into remote_exceptions (employee_id,start_date,end_date,reason) values ('{U('a7')}',local_today()-3,local_today()+8,'Working from Bengaluru for client rollout');")
-w(f"insert into roster_day (employee_id,day,work_mode,location_id,note) values ('{U('e5')}',local_today()+1,'office','{L['L1']}','Quarterly review at HQ');")
-w(f"insert into shift_day (employee_id,day,shift_id) values ('{U('f6')}',local_today()+2,'{S['EARLY']}');")
-w("insert into holidays (day,name) values ('2026-11-24','Guru Nanak Jayanti'),('2026-12-25','Christmas'),('2027-01-26','Republic Day'),('2026-11-14','Diwali (Govardhan Puja)');")
-w(f"insert into holidays (day,name,location_id) values ('2026-12-01','Plant maintenance day','{L['L2']}');")
+w(f"insert into remote_exceptions (employee_id,start_date,end_date,reason) values ('{U('a7')}',{TODAY}-3,{TODAY}+8,'Working from Bengaluru for client rollout');")
+w(f"insert into roster_day (employee_id,day,work_mode,location_id,note) values ('{U('e5')}',{TODAY}+1,'office','{L['L1']}','Quarterly review at HQ');")
+w(f"insert into shift_day (employee_id,day,shift_id) values ('{U('f6')}',{TODAY}+2,'{S['EARLY']}');")
+w(f"insert into holidays (company_id,day,name) values ('{CA}','2026-11-24','Guru Nanak Jayanti'),('{CA}','2026-12-25','Christmas'),('{CA}','2027-01-26','Republic Day'),('{CA}','2026-11-09','Diwali (Lakshmi Puja)');")
+w(f"insert into holidays (company_id,day,name,location_id) values ('{CA}','2026-12-01','Plant maintenance day','{L['L2']}');")
 # events
 ev=[]
 def E(code,n,kind,hhmm,mode='office',loc=None,dist=None,acc=None,wd_n=None,ver=None):
     wd=n if wd_n is None else wd_n
     ver = (mode=='office' and kind in('in','out')) if ver is None else ver
-    ev.append(f"('{U(code)}','{kind}',at_local(local_today()-{n},'{hhmm}'),'{mode}',{('%r'%L[loc]) if loc else 'NULL'},{dist if dist is not None else 'NULL'},{acc if acc is not None else 'NULL'},{str(ver).lower()},local_today()-{wd})")
+    ev.append(f"('{U(code)}','{kind}',{AT(n,hhmm)},'{mode}',{('%r'%L[loc]) if loc else 'NULL'},{dist if dist is not None else 'NULL'},{acc if acc is not None else 'NULL'},{str(ver).lower()},{TODAY}-{wd})")
 # past 13 days for general-shift office people
 gen_people=["a1","b2","c3","d4","e5","f6","a7","d1","f3"]
-for n in range(1,14):
+for n in range(1,19):
     for code in gen_people:
         p=[x for x in people if x[0]==code][0]
         off=p[4] or "L1"
@@ -79,9 +91,9 @@ for n in range(1,14):
         E("e2",n,'in',f"07:0{random.choice([2,5,8])}",'office','L2',random.randint(20,200),random.randint(12,60)); E("e2",n,'out',"16:05",'office','L2',60,25)
     # Arjun night: in on day n at 21:5x, out next morning (day n-1 calendar) with work_date n
     E("c9",n,'in',f"21:5{random.choice([2,6,8])}",'office','L2',90,30)
-    ev.append(f"('{U('c9')}','out',at_local(local_today()-{n-1},'06:0{random.choice([3,8])}'),'office','{L['L2']}',85,28,true,local_today()-{n})")
+    ev.append(f"('{U('c9')}','out',{AT(n-1,'06:0'+str(random.choice([3,8])))},'office','{L['L2']}',85,28,true,{TODAY}-{n})")
 # today (n=0) — mid morning
-today=[("b2","09:15",None),("c3","09:40",None),("d4","09:52",None),("e5","09:20",("11:10",None)),("a7","09:35","remote"),("d1","09:25",None),("f3","09:31",None),("a1","10:05",None)]
+today=[("b2","09:15",None),("c3","09:28",None),("d4","09:51",None),("e5","09:20",("09:55",None)),("a7","09:35","remote"),("d1","09:25",None),("f3","09:31",None),("a1","09:58",None)]
 for code,tin,extra in today:
     p=[x for x in people if x[0]==code][0]
     mode='remote' if extra=="remote" else 'office'
@@ -93,11 +105,18 @@ E("b8",0,'in',"09:28",'remote')
 E("e2",0,'in',"07:04",'office','L2',140,22)
 w("insert into attendance_events (employee_id,kind,at,work_mode,location_id,distance_m,accuracy_m,verified,work_date) values\n"+",\n".join(ev)+";")
 # drop events on days off (weekends / holidays) for everyone except night shift Saturday; done in SQL
-w("""delete from attendance_events e where e.work_date < local_today() and (select work_mode from plan_for(e.employee_id, e.work_date)) = 'off';""")
+w(f"""delete from attendance_events e where e.work_date < {TODAY} and (select work_mode from plan_for(e.employee_id, e.work_date)) = 'off';""")
+w("delete from attendance_events where at > now();  -- never show future check-ins whatever time the demo is built")
 # refusals
 w(f"""insert into attendance_attempts (employee_id,kind,at,reason,accuracy_m,distance_m) values
 ('{U('f6')}','in',now()-interval '3 hours','outside_area',24,1850),
-('{U('d4')}','in',at_local(local_today(),'09:47'),'accuracy_low',162,null),
-('{U('e2')}','in',at_local(local_today()-2,'07:01'),'outside_area',35,640),
-('{U('f6')}','in',at_local(local_today()-1,'09:40'),'location_required',null,null);""")
+('{U('d4')}','in',{AT(0,'09:47')},'accuracy_low',162,null),
+('{U('e2')}','in',{AT(2,'07:01')},'outside_area',35,640),
+('{U('f6')}','in',{AT(1,'09:40')},'location_required',null,null);""")
+# a second company that must never see Acme's data
+w("select create_company('Beta Logistics','beta','Europe/London','bina@beta.co','Bina Owner');")
+w("insert into locations (company_id,name,address,lat,lng,radius_m) select id,'Beta HQ','Westminster, London',51.5007,-0.1246,200 from companies where slug='beta';")
+w("insert into departments (company_id,name) select id,'Fleet' from companies where slug='beta';")
+w("insert into employees (company_id,full_name,email,emp_code,department_id) select c.id,'Ben Staff','ben@beta.co','B001',d.id from companies c join departments d on d.company_id=c.id where c.slug='beta';")
+w("insert into auth.users (id,email) values ('00000000-0000-0000-0000-0000000000f9','bina@beta.co'),('00000000-0000-0000-0000-0000000000f8','ben@beta.co');")
 open("seed.sql","w").write("\n".join(out)+"\n")

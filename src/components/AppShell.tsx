@@ -5,16 +5,16 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { allowed, ALL_ITEMS, normalise } from "@/lib/nav";
 import { roleLabel } from "@/lib/permissions";
-import { SessionProvider, useSession } from "@/lib/session";
+import { SessionProvider, useBrand, useSession } from "@/lib/session";
 import { AppHeader } from "./AppHeader";
 import { AppSidebar, BrandMark, NavList } from "./AppSidebar";
 import { ClickFeel } from "./ClickFeel";
 import { IconClose, IconMore, NavIcon } from "./Icons";
 import { Toaster } from "./Toaster";
-import { BRAND } from "@/lib/brand";
 
 /** Phones: slide-in drawer holding the full grouped menu. */
 function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const brand = useBrand();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const d = ref.current;
@@ -38,8 +38,8 @@ function MobileDrawer({ open, onClose }: { open: boolean; onClose: () => void })
           <span className="brand">
             <BrandMark />
             <span className="brand-tx">
-              <strong>{BRAND.appName}</strong>
-              <small>{BRAND.tagline}</small>
+              <strong>{brand.appName}</strong>
+              <small>{brand.tagline}</small>
             </span>
           </span>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close the menu"><IconClose /></button>

@@ -8,13 +8,12 @@ import { NAV, itemFor, normalise, searchNav } from "@/lib/nav";
 /** Screens outside the main menu. */
 const EXTRA_TITLES: Record<string, string> = { "/design": "Design system" };
 import { ROLES, roleLabel, type Role } from "@/lib/permissions";
-import { useSession } from "@/lib/session";
+import { useBrand, useSession } from "@/lib/session";
 import { IconBell, IconMenu, IconSearch, NavIcon } from "./Icons";
 import { Popover } from "./Popover";
 import { ThemeToggle } from "./ThemeToggle";
 import { BrandMark } from "./AppSidebar";
 import { EmptyState } from "./States";
-import { BRAND } from "@/lib/brand";
 
 /** Jump to any screen the signed-in role can open. Ctrl/⌘ + K focuses it. */
 function GlobalSearch() {
@@ -195,6 +194,7 @@ function ProfileMenu() {
 }
 
 export function AppHeader({ onOpenMenu }: { onOpenMenu: () => void }) {
+  const brand = useBrand();
   const path = usePathname();
   const current = itemFor(path ?? "/");
   return (
@@ -202,13 +202,13 @@ export function AppHeader({ onOpenMenu }: { onOpenMenu: () => void }) {
       <button type="button" className="icon-btn menu-btn" onClick={onOpenMenu} aria-label="Open the menu">
         <IconMenu />
       </button>
-      <Link href="/" className="header-brand" aria-label={`${BRAND.appName} home`}>
+      <Link href="/" className="header-brand" aria-label={`${brand.appName} home`}>
         <BrandMark />
-        <strong>{BRAND.appName}</strong>
+        <strong>{brand.appName}</strong>
       </Link>
       <div className="header-context">
-        <span className="tiny muted">{current ? sectionOf(current.href) : BRAND.appName}</span>
-        <strong className="header-title">{current?.label ?? EXTRA_TITLES[normalise(path)] ?? BRAND.appName}</strong>
+        <span className="tiny muted">{current ? sectionOf(current.href) : brand.appName}</span>
+        <strong className="header-title">{current?.label ?? EXTRA_TITLES[normalise(path)] ?? brand.appName}</strong>
       </div>
       <GlobalSearch />
       <div className="header-actions">
