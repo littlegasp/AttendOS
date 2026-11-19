@@ -7,7 +7,7 @@ import { Modal } from "@/components/Modal";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Button, FormSelect, GlassCard, SectionCard, StatusBadge } from "@/components/ui";
 import { describeChanges } from "@/lib/audit";
-import { ROLE_HELP, initials, statusLabel, type Employee } from "@/lib/employees";
+import { ROLE_HELP, accessState, initials, statusLabel, todayIn, type Employee } from "@/lib/employees";
 import { can, ROLES, roleLabel, type Role } from "@/lib/permissions";
 import { useSession } from "@/lib/session";
 import { friendlyError, supabase } from "@/lib/supabase";
@@ -72,6 +72,8 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
     onChanged();
   };
 
+  const access = e ? accessState(e, todayIn(company?.timezone ?? "Asia/Kolkata")) : "active";
+
   async function setActive(on: boolean) {
     setBusy(true);
     const patch = on && e!.employment_status === "exited" ? { active: true, employment_status: "confirmed", exit_date: null } : { active: on };
@@ -86,6 +88,11 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
   return (
     <>
       <button type="button" className="link-btn back-link" onClick={onBack}>‹ All people</button>
+      {access === "ended" ? (
+        <p className="alert warning" role="note">
+          Access ended automatically after the last working day ({shortDay(e!.exit_date!)}). To let them back in, change the last working day; when they have left, set the employment status to Exited.
+        </p>
+      ) : null}
       <GlassCard className="profile-head-card">
         <span className="avatar xl" aria-hidden="true">{initials(e.full_name)}</span>
         <div className="ph-main">
@@ -94,7 +101,7 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
             {[e.emp_code, e.designation?.name, e.department?.name].filter(Boolean).join(" · ") || "No department yet"}
           </p>
           <div className="row ph-badges">
-            {e.active ? <StatusBadge status="verified" label="Active" /> : <StatusBadge status="failed" label="Deactivated" />}
+            {access === "active" ? <StatusBadge status="verified" label="Active" /> : access === "ended" ? <StatusBadge status="failed" label="Access ended" /> : <StatusBadge status="failed" label="Deactivated" />}
             <StatusBadge status={e.employment_status === "probation" || e.employment_status === "notice_period" ? "pending" : e.employment_status === "exited" ? "failed" : "approved"} label={statusLabel(e.employment_status)} />
             <span className="role-tag">{roleLabel(e.role)}</span>
             {e.user_id ? <StatusBadge status="present" label="Login linked" /> : <StatusBadge status="weekly-off" label="No login yet" />}

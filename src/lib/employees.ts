@@ -79,7 +79,22 @@ export const EMPTY_FORM: EmployeeForm = {
 };
 
 /** Field errors shown under the inputs (the database repeats these checks). */
-export function validateEmployee(f: EmployeeForm, selfId?: string): Partial<Record<keyof EmployeeForm, string>> {
+/** Today's date (YYYY-MM-DD) in the company's time zone. */
+export function todayIn(timeZone: string, now = Date.now()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(now));
+}
+
+/**
+ * Whether the person can sign in, as the database decides it (my_employee_id): active, and the last
+ * working day (if set) not yet passed in the company's time zone.
+ */
+export function accessState(e: Pick<Employee, "active" | "exit_date">, today: string): "active" | "off" | "ended" {
+  if (!e.active) return "off";
+  if (e.exit_date && e.exit_date < today) return "ended";
+  return "active";
+}
+
+export function validateEmployee(f: EmployeeForm, selfId?: string, today?: string): Partial<Record<keyof EmployeeForm, string>> {
   const e: Partial<Record<keyof EmployeeForm, string>> = {};
   if (f.full_name.trim().length < 2) e.full_name = "Enter the full name (at least 2 characters).";
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email.trim())) e.email = "Enter a valid work e-mail.";
@@ -87,6 +102,8 @@ export function validateEmployee(f: EmployeeForm, selfId?: string): Partial<Reco
   if (f.emp_code && !/^[A-Za-z0-9-]{1,20}$/.test(f.emp_code.trim())) e.emp_code = "Letters, digits and - only (up to 20).";
   if (selfId && f.manager_id === selfId) e.manager_id = "Someone can't report to themselves.";
   if (f.exit_date && f.joining_date && f.exit_date < f.joining_date) e.exit_date = "The exit date can't be before the joining date.";
+  else if (today && f.employment_status === "exited" && f.exit_date && f.exit_date > today)
+    e.exit_date = "Exited can't have a future date. Use “Notice period” with the last working day instead.";
   return e;
 }
 

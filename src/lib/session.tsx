@@ -91,6 +91,12 @@ async function loadEmployee(userId: string): Promise<EmployeeRow | null> {
   return data;
 }
 
+/** The database's answer for a login that can't see its own record: switched off, or never linked. */
+async function whyNoAccess(): Promise<string> {
+  const { data } = await supabase().rpc("my_account_status");
+  return data === "inactive" ? "inactive" : "not-linked";
+}
+
 function PreviewProvider({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<Role>("admin");
   useEffect(() => {
@@ -141,9 +147,8 @@ function LiveProvider({ children }: { children: React.ReactNode }) {
       try {
         const row = await loadEmployee(uid);
         if (!live) return;
-        // No employee record linked to this login, or the record is switched off.
-        if (!row) return signOut("not-linked");
-        if (!row.active) return signOut("inactive");
+        // No employee record linked to this login, or the record is switched off / past the last day.
+        if (!row || !row.active) return signOut(await whyNoAccess());
         setUserId(uid);
         setMe(row);
         setProblem(null);
@@ -153,6 +158,7 @@ function LiveProvider({ children }: { children: React.ReactNode }) {
     }
     sb.auth.getSession().then(({ data }) => check(data.session?.user.id ?? null));
     const { data: sub } = sb.auth.onAuthStateChange((event) => {
+      // Signed out elsewhere, or the session could not be refreshed (expired / revoked): back to sign-in.
       if (event === "SIGNED_OUT" && !signingOutHere) window.location.replace("/login?error=signed-out");
     });
     return () => {
@@ -167,9 +173,8 @@ function LiveProvider({ children }: { children: React.ReactNode }) {
     if (!userId) return;
     const recheck = () =>
       loadEmployee(userId)
-        .then((row) => {
-          if (!row) return signOut("not-linked");
-          if (!row.active) return signOut("inactive");
+        .then(async (row) => {
+          if (!row || !row.active) return signOut(await whyNoAccess());
           setMe((cur) => (cur && JSON.stringify(cur) !== JSON.stringify(row) ? row : cur));
         })
         .catch(() => {

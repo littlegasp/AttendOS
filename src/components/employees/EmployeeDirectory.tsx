@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Button, GlassCard, StatusBadge } from "@/components/ui";
-import { filterOps, initials, NO_FILTERS, statusLabel, EMPLOYMENT_STATUS, type Employee, type Filters } from "@/lib/employees";
+import { accessState, filterOps, initials, todayIn, NO_FILTERS, statusLabel, EMPLOYMENT_STATUS, type Employee, type Filters } from "@/lib/employees";
 import { can } from "@/lib/permissions";
 import { useSession } from "@/lib/session";
 import { supabase } from "@/lib/supabase";
@@ -23,7 +23,8 @@ export function shortDay(d: string | null) {
  * (PostgREST filters), and row level security limits rows to what the role may see.
  */
 export function EmployeeDirectory({ lookups, onOpen, onAdd, refreshKey }: { lookups: Lookups; onOpen: (id: string) => void; onAdd: () => void; refreshKey: number }) {
-  const { role } = useSession();
+  const { role, company } = useSession();
+  const today = todayIn(company?.timezone ?? "Asia/Kolkata");
   const manage = can(role, "manageEmployees");
   const [f, setF] = useState<Filters>(NO_FILTERS);
   const [q, setQ] = useState("");
@@ -133,7 +134,7 @@ export function EmployeeDirectory({ lookups, onOpen, onAdd, refreshKey }: { look
                     <td>{shortDay(e.joining_date)}</td>
                     <td>
                       <span className="badge-stack">
-                        {!e.active ? <StatusBadge status="failed" label="Deactivated" /> : <StatusBadge status={e.employment_status === "probation" || e.employment_status === "notice_period" ? "pending" : "verified"} label={statusLabel(e.employment_status)} />}
+                        {!e.active ? <StatusBadge status="failed" label="Deactivated" /> : accessState(e, today) === "ended" ? <StatusBadge status="failed" label="Access ended" /> : <StatusBadge status={e.employment_status === "probation" || e.employment_status === "notice_period" ? "pending" : "verified"} label={statusLabel(e.employment_status)} />}
                         {e.role !== "employee" ? <span className="role-tag">{ROLE_LABEL[e.role]}</span> : null}
                       </span>
                     </td>
@@ -151,7 +152,7 @@ export function EmployeeDirectory({ lookups, onOpen, onAdd, refreshKey }: { look
                     <strong>{e.full_name}</strong>
                     <span className="meta block">{[e.emp_code, e.designation?.name, e.department?.name].filter(Boolean).join(" · ") || e.email}</span>
                   </span>
-                  {!e.active ? <StatusBadge status="failed" label="Off" /> : e.role !== "employee" ? <span className="role-tag">{ROLE_LABEL[e.role]}</span> : null}
+                  {accessState(e, today) !== "active" ? <StatusBadge status="failed" label="Off" /> : e.role !== "employee" ? <span className="role-tag">{ROLE_LABEL[e.role]}</span> : null}
                 </button>
               </li>
             ))}

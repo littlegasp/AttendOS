@@ -22,7 +22,7 @@ S={"GEN":"aaaaaaaa-0000-0000-0000-000000000001","NIGHT":"aaaaaaaa-0000-0000-0000
 D={"Sales":"dddddddd-0000-0000-0000-000000000001","Operations":"dddddddd-0000-0000-0000-000000000002","Accounts":"dddddddd-0000-0000-0000-000000000003","HR":"dddddddd-0000-0000-0000-000000000004"}
 TODAY=f"local_today('{CA}')"
 def AT(n,hhmm): return f"at_local('{CA}', {TODAY}-{n}, '{hhmm}')"
-out=[]
+out=["-- Everything below is sample data: audit entries are marked source = seed.", "select set_config('attendos.source', 'seed', false);"]
 w=out.append
 w(f"insert into companies (id,name,slug,timezone,max_accuracy_m) values ('{CA}','Acme Industries','acme','Asia/Kolkata',100);")
 w(f"insert into locations (id,company_id,name,address,lat,lng,radius_m,active) values ('{L['L1']}','{CA}','Andheri HQ','Saki Vihar Rd, Andheri East, Mumbai',19.1136,72.8697,150,true),('{L['L2']}','{CA}','Pune Plant','Chakan MIDC Phase II, Pune',18.7603,73.8630,250,true),('{L['L3']}','{CA}','Thane Warehouse','Wagle Estate, Thane',19.1960,72.9560,200,false);")

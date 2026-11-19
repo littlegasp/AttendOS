@@ -1,65 +1,81 @@
-# AttendOS — what is still needed to go live
+# AttendOS — going live: what is verified and what is still needed
 
-Everything below is **not done yet**. The database and app were tested against a local PostgreSQL 16
-with PostgREST 12 (the same REST layer Supabase uses). None of it has run on a real Supabase project.
+**AttendOS is not production-ready yet.** Nothing has run on a real Supabase project. What has been verified,
+and how:
+
+| Layer | Verified with | Not yet verified |
+|---|---|---|
+| Database rules (RLS, triggers, functions) | PostgreSQL 16, `npm run test:db` (all migrations, ~250 checks) | Supabase's Postgres build and its built-in roles |
+| REST API | PostgREST 12 (the layer Supabase uses) | Supabase's API gateway in front of it |
+| Sign-in | **Real Supabase Auth server** (`supabase/auth` v2.198.0 release binary) + real PostgREST, mail caught locally — `supabase/authcheck`, 29 browser checks | Hosted Auth settings, real e-mail delivery (SMTP), rate limits, custom domain |
+| Review screenshots | Real app build + PostgREST + PostgreSQL with sample data and signed test tokens | — |
+
+### The simulated-token limitation (review screenshots)
+The Phase 2/3 review screenshots sign people in with a **test token signed by a local secret**, not through
+Supabase Auth: the database still checks each person's role and company exactly as in production, but no
+password, e-mail or session was involved. Since this verification pass, the sign-in flows themselves are
+checked separately against the real Supabase Auth server (`supabase/authcheck`). The hosted project still has
+to be checked once (section 5).
 
 ## 1. Supabase project (one for all companies)
-1. Create **one** Supabase project in the **Mumbai (ap-south-1)** region. Every company shares it;
-   row level security keeps each company's rows separate (migration 0003).
-2. SQL editor → run the migrations in order, once each:
-   `0001_attendance_core.sql`, `0002_refinement.sql`, `0003_multi_tenant.sql`, `0004_employees.sql`.
-   Later changes always come as a new numbered file; never edit one that has run.
-3. Create each company from the SQL editor (it runs as the database owner, which is the only role
-   allowed to call this):
-   ```sql
-   select public.create_company('Acme Industries', 'acme', 'Asia/Kolkata', 'owner@acme.in', 'Owner Name');
-   ```
-   This makes the company and its first Admin record. Branding (app name, logo URL, accent colours)
-   is a row in `companies`; the Admin can change the time zone and rules in Settings.
-4. Cloudflare build variables (see `.env.example`): `NEXT_PUBLIC_SUPABASE_URL` and
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY`. The service-role key must **never** go into the site.
-5. Turn on Point-in-Time Recovery or check the daily backup retention on the chosen plan.
+1. Create **one** project in **Mumbai (ap-south-1)**. Row level security keeps companies apart.
+2. SQL editor → run, in order, once each: `0001_attendance_core.sql`, `0002_refinement.sql`,
+   `0003_multi_tenant.sql`, `0004_employees.sql`, `0005_verification.sql`. Later changes come as new numbered files.
+3. Create each company (owner only):
+   `select public.create_company('Acme Industries', 'acme', 'Asia/Kolkata', 'owner@acme.in', 'Owner Name');`
+4. Cloudflare build variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (see `.env.example`).
+   The service-role key never goes into the site.
+5. Backups: check point-in-time recovery / daily backup retention on the plan.
 
-## 2. Supabase Auth — settings this design depends on
-People are employee records first. A login is linked to the record **only when the sign-in e-mail
-matches and is confirmed** (`handle_new_user` and `on_auth_user_confirmed` triggers). So:
+## 2. Supabase Auth settings
+Logins are linked to employee records **only by a confirmed work e-mail** (migration 0005):
+- linked when the e-mail is confirmed, or when HR adds the person after they confirmed;
+- never to a switched-off record, never to two records, one work e-mail = one person across all companies;
+- if a login changes its e-mail away from the work e-mail, the link is removed (and logged); it comes back if
+  the login returns to the work e-mail.
 
-| Setting | Required value | Why |
+| Setting (Dashboard → Authentication) | Value | Why |
 |---|---|---|
-| Authentication → Providers → Email | Enabled, **Confirm email ON** | Linking trusts `email_confirmed_at`. With confirmation off, anyone could sign up with a colleague's address and take over their record. |
-| Site URL | the company site, e.g. `https://attendos.example.com` | Used in confirmation and reset links. |
-| Redirect URLs | `https://<site>/login*` and `https://<site>/reset*` (plus preview URLs if used) | Password reset returns to the app. |
-| Allow new users to sign up | ON (sign-ups without an employee record see "not linked" and get no data) or OFF if every login is invited | Both are safe; OFF is tidier. |
-| SMTP | Custom SMTP (own domain, SPF/DKIM) | Supabase's built-in mailer is rate-limited and only for testing. |
-| JWT expiry / refresh | defaults are fine | RLS reads `auth.uid()` from the token on every request. |
+| Email provider | Enabled, **Confirm email ON** | Linking trusts the confirmed address. Off = anyone could claim a colleague's record. |
+| Secure email change | ON | Changing a login's e-mail needs both addresses confirmed. |
+| Hooks → **Before User Created** | Postgres function `public.hook_before_user_created` | Only work e-mails HR has added can create a login; others get "isn't set up in AttendOS yet". Grant: `grant execute on function public.hook_before_user_created(jsonb) to supabase_auth_admin;` (0005 does this when the role exists). Note: this tells a visitor whether an e-mail is registered — acceptable for work e-mails; leave the hook off if not. |
+| Site URL | the company site, e.g. `https://attendos.example.com` | Base for e-mail links. |
+| Redirect URLs | `https://<site>/login*`, `https://<site>/reset-password*` | Confirmation and reset return here. |
+| Allow new users to sign up | ON (with the hook) | People create their own login on `/login` → "First time here? Create your login". |
+| Minimum password length | 8 or more | Matches the app's checks. |
+| JWT expiry | default 3600 s | See "sessions" below. |
+| SMTP | **Custom SMTP** on the company's domain (SPF/DKIM/DMARC) | Supabase's built-in sender is for testing only and heavily rate-limited. |
+| E-mail templates | Confirm signup, Reset password | Plain wording, company name; keep `{{ .ConfirmationURL }}`. |
 
-**Inviting people from the app is not built.** Today HR adds the employee in Employees, then the person
-signs up at `/login` (or `/login?company=<slug>` for the company's branding) with that same work e-mail
-and confirms it. A one-click "Send invite" button needs a **Supabase Edge Function** holding the
-service-role key (`auth.admin.inviteUserByEmail`), which checks that the caller is HR/Admin of the
-employee's company. That is a small, separate piece of work to schedule.
+**Sessions (verified locally):** sign-out ends the session in the browser and on the server; a new password signs
+out every other device; another device's current token keeps working until it expires (up to the JWT expiry,
+1 hour by default) and is then refused — but **deactivation or exit takes effect on the very next request**,
+because the database checks the employee record each time, not the token.
 
-Also still to verify on the real project: password reset round trip, sign-out on all devices,
-an exited employee being refused (the app signs them out because `active = false`; RLS also hides data).
+## 3. Invitation e-mails (not built)
+Today: HR adds the person → tells them to open `https://<site>/login?company=<slug>` → "First time here? Create
+your login" with the same work e-mail → confirm the e-mail. Verified locally end to end.
 
-## 3. Maps and address search (Settings → Locations & GPS)
-The map uses **Leaflet** with **OpenStreetMap's public tiles**, and address search calls
-**Nominatim** (`nominatim.openstreetmap.org`) from the browser. Both are free community services with
-usage policies:
+A "Send invite" button needs a **Supabase Edge Function** (server side, holds the service-role key) that:
+checks the caller is HR/Admin of the employee's company (verify their JWT, call `my_role()`), then calls
+`auth.admin.inviteUserByEmail(work_email, { redirectTo: https://<site>/reset-password })`, and logs the invite in
+the audit log. The invite link confirms the address (so linking happens) and lets the person set a password.
+Needs: the function, the "Invite user" e-mail template, the redirect URL above, and a test on the real project.
 
-- **Tiles:** keep the visible "© OpenStreetMap contributors" attribution (already shown); fine for
-  light use by a few HR/Admin users. Heavy or commercial use across many companies should move to a
-  tile provider with a key (e.g. MapTiler, Stadia, Thunderforest) or self-hosted tiles.
-- **Nominatim:** at most about one request per second, identified traffic, and **no type-ahead
-  autocomplete**. AttendOS only searches when HR presses Search, which fits. For a multi-company SaaS,
-  plan a paid geocoder (or self-hosted Nominatim) before onboarding many companies.
-- If a Content-Security-Policy is added to `public/_headers` later, allow the tile and geocoder hosts
-  in `img-src` / `connect-src`.
-- Without tiles the screen still works: the office pin, radius circle and coordinates are drawn and
-  saved; only the background map is blank (as in the review screenshots, taken offline).
-- Employees' check-in never uses the map or geocoder — the GPS check is done in the database.
+## 4. Maps and address search
+Leaflet with **OpenStreetMap public tiles**; address search uses **Nominatim** from the browser.
+- Keep the "© OpenStreetMap contributors" attribution (shown). Fine for a few HR users; for many companies use a
+  tile provider with a key (MapTiler, Stadia, Thunderforest) or self-hosted tiles.
+- Nominatim: at most about one request per second, identifiable traffic, **no type-ahead autocomplete**.
+  AttendOS searches only when HR presses Search. For a multi-company service, plan a paid geocoder or self-host.
+- If a Content-Security-Policy is added to `public/_headers`, allow those hosts in `img-src` / `connect-src`.
+- Without tiles the screen still works (pin, radius and coordinates); check-in never uses maps or geocoding.
 
-## 4. Before the first real company
-- Run `npm run test:db` against a fresh Supabase branch/project, not only local Postgres.
-- Sign up a test Admin, HR, Manager and Employee in two companies and repeat the isolation checks by hand.
-- Check `public/_headers` is served (geolocation allowed for this site only).
+## 5. Before the first real company (checklist)
+- [ ] Project in Mumbai, migrations 0001–0005 run, `create_company` done.
+- [ ] Auth settings in section 2, hook enabled, custom SMTP, templates.
+- [ ] Repeat `supabase/authcheck` by hand on the real project: sign-up refused for unknown e-mail, sign-up +
+      confirm, resend, reset, sign-out, second device after reset, deactivate mid-session, reactivate.
+- [ ] Two companies, four roles each: repeat the isolation checks by hand (directory, departments, audit log).
+- [ ] `public/_headers` served (geolocation for this site only).
+- [ ] Decide invitation approach (section 3) and map/geocoder provider (section 4).

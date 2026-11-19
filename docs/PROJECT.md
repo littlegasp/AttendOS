@@ -132,19 +132,45 @@ Database `supabase/migrations/0004_employees.sql` (no tables duplicated; `employ
   (Admin), **Deactivate/Reactivate** with confirmation; Managers see their team read-only; employees see
   **My profile**. **Departments** (Departments | Designations tabs). **Settings → Activity log**.
 - Attendance, GPS, corrections and roster unchanged in behaviour; re-tested on the new schema.
-- Tests: `npm run test:db` 174 database checks (attendance, refinement, tenancy, employees);
-  `npm run check` 24 app checks.
+- Tests at Phase 3 review: 174 database checks, 24 app checks (see the verification pass below for current counts).
+
+## Phase 3 verification pass (19 Nov 2026, before merging to main)
+Migration `0005_verification.sql`, tests `supabase/tests/verification_test.sql` (75 checks) and the real sign-in
+check `supabase/authcheck` (29 browser checks against the real Supabase Auth server).
+- **Sign-in:** "Create your login" on `/login` (sign-up for people HR added), confirmation e-mail, resend,
+  expired-link message, password reset (signs out other devices), sign-out, session renewal, clear messages for
+  switched-off / not-linked logins (`my_account_status()`). Linking only by confirmed work e-mail; never to a
+  switched-off record or twice; follows login e-mail changes; links a person who confirmed before HR added
+  them. Optional Auth hook `hook_before_user_created` lets only known work e-mails create a login.
+- **Bug found and fixed:** adding an employee from the app failed with "You don't have permission" (the read
+  policy looked the new row up again inside the same request). The Phase 3 screenshots only opened the form, so
+  this wasn't caught; the real sign-in check found it. The rule is now written on the row itself.
+- **Audit log:** who/when/company/source filled in by the database; append-only (no grants, and a trigger
+  refuses update/delete/truncate even from the SQL editor); `source` = app (signed-in person) / system
+  (sign-in linking, setup) / seed (sample data — only honoured for scripts run directly on the database, never
+  through the API). Activity log shows "Sample data" and "Automatic" badges and a "Who" filter.
+- **Exit:** exit date in the company's time zone; "Exited" can't have a future date (use Notice period with the
+  last day); access ends automatically after the last working day; can't reactivate while Exited; rejoining
+  clears the exit date and keeps the same login and roster; days after leaving aren't counted as absent;
+  nobody can mark themselves exited; HR can't exit an Admin/HR.
+- **Departments, designations, offices, shifts:** switched-off ones can't be newly assigned; people already
+  assigned keep them (history stays right); department heads must be active.
+- **Multi-tenant:** re-checked employees, departments, designations, audit log and company settings across
+  two companies (moving records, creating in the other company, reading by company id, editing by id).
+- **Employee Documents:** assessed, not built — `docs/EMPLOYEE-DOCUMENTS.md` (separate phase).
+- Requirements still open for going live: `docs/DEPLOYMENT.md`.
 
 ### Known limits of Phase 3
-- No "Send invite" e-mail from the app (needs an Edge Function — see DEPLOYMENT.md); the person signs up
-  with the work e-mail HR entered.
+- Not on a real Supabase project yet; hosted Auth settings, SMTP and invitations untested there.
+- No "Send invite" e-mail from the app (needs an Edge Function — see DEPLOYMENT.md); people create their own
+  login with the work e-mail HR entered.
 - Attendance Register moved to Phase 4 with Leave and Reports (not in the Phase 3 brief).
-- No bulk import (CSV) of employees yet.
+- No bulk import (CSV) of employees yet. No Employee Documents yet.
 
 ### What is real and what is not (Phase 3 review)
-Same as the refinement pass: real app, real local PostgreSQL + PostgREST with row level security, signed
-test tokens instead of Supabase Auth, sample companies (Acme Industries, Beta Logistics), offline map tiles.
-Not deployed to a Supabase project yet.
+Review screenshots: real app, real local PostgreSQL + PostgREST with row level security, signed test tokens
+instead of Supabase Auth, sample companies (Acme Industries, Beta Logistics), offline map tiles. Sign-in
+screenshots: real Supabase Auth server, real PostgREST, local mail catcher, fresh database.
 
 ## Next — Phase 4 (do not start until Phase 3 is approved)
 Leave management, Attendance Register (daily/monthly, export within scope), shift/late rules polish.

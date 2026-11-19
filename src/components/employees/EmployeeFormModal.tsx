@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Button, FormInput, FormSelect } from "@/components/ui";
-import { EMPLOYMENT_STATUS, EMPTY_FORM, toRow, validateEmployee, type Employee, type EmployeeForm } from "@/lib/employees";
+import { EMPLOYMENT_STATUS, EMPTY_FORM, toRow, todayIn, validateEmployee, type Employee, type EmployeeForm } from "@/lib/employees";
+import { useSession } from "@/lib/session";
 import { friendlyError, supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
 import type { Lookups } from "./lookups";
@@ -30,7 +31,11 @@ function explain(msg: string): string {
   if (/loop/i.test(msg)) return "That reporting manager would create a loop (they report, directly or not, to this person).";
   if (/active employee/i.test(msg)) return "The reporting manager must be an active employee.";
   if (/linked to a login/i.test(msg)) return "This person already signs in with that e-mail, so it can't be changed here.";
-  if (/Admin or HR account/i.test(msg)) return "Only an administrator can change the e-mail or access of an Admin or HR account.";
+  if (/Admin or HR account/i.test(msg)) return "Only an administrator can change the e-mail, access or exit of an Admin or HR account.";
+  if (/switched off|not in use/i.test(msg)) return msg; // department, designation, office or shift switched off — already plain
+  if (/exit date is in the future/i.test(msg)) return "Exited can't have a future date. Use “Notice period” with the last working day; access ends after that day.";
+  if (/mark yourself as exited/i.test(msg)) return "You can't mark yourself as exited. Ask another HR person or an administrator.";
+  if (/before reactivating/i.test(msg)) return "Change the employment status from Exited first, then reactivate.";
   return friendlyError({ message: msg });
 }
 
@@ -39,7 +44,8 @@ export function EmployeeFormModal({ employee, lookups, onClose, onSaved }: { emp
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const errors = validateEmployee(f, employee?.id);
+  const { company } = useSession();
+  const errors = validateEmployee(f, employee?.id, todayIn(company?.timezone ?? "Asia/Kolkata"));
   const set = (k: keyof EmployeeForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((x) => ({ ...x, [k]: e.target.value }));
   const show = (k: keyof EmployeeForm) => (tried ? errors[k] : undefined);
   const linked = Boolean(employee?.user_id);
@@ -122,7 +128,7 @@ export function EmployeeFormModal({ employee, lookups, onClose, onSaved }: { emp
             />
           </div>
           <div className="form-2">
-            <FormSelect label="Employment status" value={f.employment_status} onChange={set("employment_status")} options={EMPLOYMENT_STATUS} helper={f.employment_status === "exited" ? "Saving as Exited switches off their access." : undefined} />
+            <FormSelect label="Employment status" value={f.employment_status} onChange={set("employment_status")} options={EMPLOYMENT_STATUS} helper={f.employment_status === "exited" ? "Saving as Exited switches off their access at once. History is kept." : f.employment_status === "notice_period" ? "Access ends automatically after the last working day." : undefined} />
             {f.employment_status === "exited" || f.employment_status === "notice_period" || f.exit_date ? (
               <FormInput label={f.employment_status === "notice_period" ? "Last working day" : "Exit date"} type="date" value={f.exit_date} onChange={set("exit_date")} error={show("exit_date")} />
             ) : (

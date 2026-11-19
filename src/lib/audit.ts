@@ -77,6 +77,10 @@ export function describeChanges(before: Json, after: Json, names: Record<string,
   const keys = new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})]);
   const out: string[] = [];
   for (const k of keys) {
+    if (k === "user_id" && before && after && Boolean(before.user_id) !== Boolean(after.user_id)) {
+      out.push(after.user_id ? "Sign-in: login linked (confirmed work e-mail)" : "Sign-in: login unlinked");
+      continue;
+    }
     if (NOISE.has(k)) continue;
     const a = before?.[k];
     const b = after?.[k];
@@ -99,3 +103,11 @@ export function subjectOf(before: Json, after: Json, names: Record<string, strin
   if (typeof r.employee_id === "string") return names[r.employee_id] ?? "Someone";
   return "";
 }
+
+/** Where an entry came from: a signed-in person, the system (sign-in linking, setup), or sample data. */
+export type AuditSource = "app" | "system" | "seed";
+export const SOURCE_LABEL: Record<AuditSource, string> = {
+  app: "People's actions",
+  system: "Automatic / setup",
+  seed: "Sample data",
+};
