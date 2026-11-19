@@ -44,7 +44,10 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
     const audit = manage
       ? (must(await sb.from("audit_log").select("id, at, action, actor_employee, before, after").eq("target", "employees").eq("target_id", id).order("at", { ascending: false }).limit(15)) as AuditRow[])
       : [];
-    return { emp, reports, audit };
+    const invites = manage
+      ? (must(await sb.from("employee_invitations").select("id, invited_at, status, error, accepted_at").eq("employee_id", id).order("invited_at", { ascending: false }).limit(5)) as Invite[])
+      : [];
+    return { emp, reports, audit, invites };
   }, `${id}:${bump}`);
 
   if (error) return <GlassCard><ErrorState title="Couldn't load this person" body={error} onRetry={reload} /></GlassCard>;
@@ -142,9 +145,20 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
               <dd>
                 {e.user_id
                   ? "Signs in with this e-mail."
-                  : `Not yet. They get access once they sign up${company ? ` at the ${company.name} sign-in page` : ""} with this e-mail and confirm it.`}
+                  : `Not yet. Send an invitation, or they can create their login${company ? ` on the ${company.name} sign-in page` : ""} with this e-mail.`}
               </dd>
+              {data.invites.length ? (
+                <>
+                  <dt>Invitation</dt>
+                  <dd>
+                    {data.invites[0]!.status === "accepted" ? "Accepted" : data.invites[0]!.status === "failed" ? "Not sent" : "Sent"}{" "}
+                    {new Date(data.invites[0]!.invited_at).toLocaleString("en-IN", { timeZone: company?.timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    {data.invites[0]!.status === "failed" && data.invites[0]!.error ? <span className="meta block">{data.invites[0]!.error}</span> : null}
+                  </dd>
+                </>
+              ) : null}
             </dl>
+            {manage && !self && !e.user_id && access === "active" ? <InviteButton employeeId={e.id} email={e.email} onSent={after} /> : null}
           </SectionCard>
           <SectionCard title="Direct reports" subtitle={`${data.reports.filter((r) => r.active).length} active`}>
             {data.reports.length === 0 ? (
@@ -215,6 +229,39 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
       />
     </>
   );
+}
+
+interface Invite { id: number; invited_at: string; status: "sent" | "failed" | "accepted"; error: string | null; accepted_at: string | null }
+
+/**
+ * Invitation: the database checks the request (HR of this company, no login yet, not sent in the last 10 minutes)
+ * and returns the work e-mail; Supabase Auth then e-mails a one-time sign-in link to that address only.
+ */
+function InviteButton({ employeeId, email, onSent }: { employeeId: string; email: string; onSent: () => void }) {
+  const [busy, setBusy] = useState(false);
+  async function send() {
+    setBusy(true);
+    const sb = supabase();
+    const { data, error } = await sb.rpc("prepare_invitation", { p_employee: employeeId });
+    if (error) {
+      setBusy(false);
+      return toast({ tone: "danger", title: "Invitation not sent", body: error.message.replace(/^.*?: /, "") });
+    }
+    const { error: sendErr } = await sb.auth.signInWithOtp({
+      email: data.email,
+      options: { shouldCreateUser: true, emailRedirectTo: `${window.location.origin}/reset-password?welcome=1` },
+    });
+    if (sendErr) {
+      await sb.rpc("invitation_failed", { p_id: data.id, p_error: sendErr.message });
+      setBusy(false);
+      onSent();
+      return toast({ tone: "danger", title: "E-mail service refused the invitation", body: sendErr.message });
+    }
+    setBusy(false);
+    toast({ tone: "success", title: "Invitation sent", body: `A sign-in link went to ${email}. It works once.` });
+    onSent();
+  }
+  return <Button size="sm" variant="primary" loading={busy} onClick={send}>Send invite</Button>;
 }
 
 function RoleModal({ emp, onClose, onSaved }: { emp: Employee; onClose: () => void; onSaved: () => void }) {

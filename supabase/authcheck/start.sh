@@ -30,7 +30,7 @@ export GOTRUE_HOOK_BEFORE_USER_CREATED_ENABLED=true GOTRUE_HOOK_BEFORE_USER_CREA
 export GOTRUE_LOG_LEVEL=info
 ( cd "$AUTH_DIR" && ./auth migrate ) > auth-migrate.log 2>&1
 for f in ../migrations/0001_attendance_core.sql ../migrations/0002_refinement.sql ../migrations/0003_multi_tenant.sql \
-         ../migrations/0004_employees.sql ../migrations/0005_verification.sql ../migrations/0006_leave_register_reports.sql setup.sql; do
+         ../migrations/0004_employees.sql ../migrations/0005_verification.sql ../migrations/0006_leave_register_reports.sql ../migrations/0007_invitations.sql ../migrations/0008_hardening.sql setup.sql; do
   psql -q -v ON_ERROR_STOP=1 -d attendos_auth -f "$f" > /dev/null
 done
 psql -q -d attendos_auth -c "grant execute on function auth.uid(), auth.role() to anon, authenticated"

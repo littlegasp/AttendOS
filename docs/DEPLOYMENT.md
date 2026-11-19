@@ -5,9 +5,10 @@ and how:
 
 | Layer | Verified with | Not yet verified |
 |---|---|---|
-| Database rules (RLS, triggers, functions) | PostgreSQL 16, `npm run test:db` (all migrations, 308 checks) | Supabase's Postgres build and its built-in roles |
+| Database rules (RLS, triggers, functions) | PostgreSQL 16, `npm run test:db` (all migrations, 356 checks incl. the security matrix) | Supabase's Postgres build and its built-in roles |
 | REST API | PostgREST 12 (the layer Supabase uses) | Supabase's API gateway in front of it |
-| Sign-in | **Real Supabase Auth server** (`supabase/auth` v2.198.0 release binary) + real PostgREST, mail caught locally — `supabase/authcheck`, 29 browser checks | Hosted Auth settings, real e-mail delivery (SMTP), rate limits, custom domain |
+| Sign-in and invitations | **Real Supabase Auth server** (`supabase/auth` v2.198.0 release binary) + real PostgREST, mail caught locally — `supabase/authcheck`, 36 browser checks |
+| App behaviour | `e2e/regression.py`: GPS cases, HR workflows, exports, print, 208 screen loads — 26 checks | Hosted Auth settings, real e-mail delivery (SMTP), rate limits, custom domain |
 | Review screenshots | Real app build + PostgREST + PostgreSQL with sample data and signed test tokens | — |
 
 ### The simulated-token limitation (review screenshots)
@@ -20,7 +21,7 @@ to be checked once (section 5).
 ## 1. Supabase project (one for all companies)
 1. Create **one** project in **Mumbai (ap-south-1)**. Row level security keeps companies apart.
 2. SQL editor → run, in order, once each: `0001_attendance_core.sql`, `0002_refinement.sql`,
-   `0003_multi_tenant.sql`, `0004_employees.sql`, `0005_verification.sql`, `0006_leave_register_reports.sql`. Later changes come as new numbered files.
+   `0003_multi_tenant.sql`, `0004_employees.sql`, `0005_verification.sql`, `0006_leave_register_reports.sql`, `0007_invitations.sql`, `0008_hardening.sql`. Later changes come as new numbered files.
 3. Create each company (owner only):
    `select public.create_company('Acme Industries', 'acme', 'Asia/Kolkata', 'owner@acme.in', 'Owner Name');`
 4. Cloudflare build variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (see `.env.example`).
@@ -52,15 +53,31 @@ out every other device; another device's current token keeps working until it ex
 1 hour by default) and is then refused — but **deactivation or exit takes effect on the very next request**,
 because the database checks the employee record each time, not the token.
 
-## 3. Invitation e-mails (not built)
-Today: HR adds the person → tells them to open `https://<site>/login?company=<slug>` → "First time here? Create
-your login" with the same work e-mail → confirm the e-mail. Verified locally end to end.
+## 3. Invitation e-mails (built — migration 0007)
+HR opens the person's profile → **Send invite**. The database (`prepare_invitation`) checks that the caller is
+HR/Admin of that company, the person is active, has no login yet and wasn't invited in the last 10 minutes (max 5
+a day), records the invitation and returns the **work e-mail from the employee record**. The app then asks
+Supabase Auth to e-mail a one-time sign-in link to that address (`signInWithOtp`, no service key needed).
+Opening the link confirms the address → the login is linked to that employee (0005 rules) → the person lands on
+`/reset-password?welcome=1` and chooses a password. The invitation shows as Sent / Not sent / Accepted on the
+profile and in the activity log. Verified locally with the real Auth server.
 
-A "Send invite" button needs a **Supabase Edge Function** (server side, holds the service-role key) that:
-checks the caller is HR/Admin of the employee's company (verify their JWT, call `my_role()`), then calls
-`auth.admin.inviteUserByEmail(work_email, { redirectTo: https://<site>/reset-password })`, and logs the invite in
-the audit log. The invite link confirms the address (so linking happens) and lets the person set a password.
-Needs: the function, the "Invite user" e-mail template, the redirect URL above, and a test on the real project.
+Hosted settings it needs:
+- Before User Created hook ON (section 2), so only HR-added work e-mails can create a login.
+- Redirect URL `https://<site>/reset-password*` (already listed).
+- E-mail templates: a new login receives **Confirm signup**; a login that already exists but isn't linked receives
+  **Magic Link**. Word both as an invitation that also works for self sign-up, e.g. "You've been invited to
+  {company} on AttendOS — open this link to confirm your work e-mail and set your password." Keep
+  `{{ .ConfirmationURL }}`.
+- Custom SMTP (section 2) — Supabase's built-in sender only delivers to project team addresses and is heavily
+  rate-limited.
+- Optional later: a branded server-side invite (Edge Function with `auth.admin.inviteUserByEmail`) if a separate
+  "Invite user" template is wanted.
+
+## 3b. Performance limits on hosted Supabase
+Signed-in API calls have a default statement timeout of 8 seconds on Supabase. Monthly register/reports take
+about 3 s at 100 people and 8 s at 300 here (`docs/PERFORMANCE.md`), so: pilot with up to ~100 people, and add
+the daily summary table before larger companies. Do not just raise the timeout as the fix.
 
 ## 4. Maps and address search
 Leaflet with **OpenStreetMap public tiles**; address search uses **Nominatim** from the browser.
@@ -72,10 +89,12 @@ Leaflet with **OpenStreetMap public tiles**; address search uses **Nominatim** f
 - Without tiles the screen still works (pin, radius and coordinates); check-in never uses maps or geocoding.
 
 ## 5. Before the first real company (checklist)
-- [ ] Project in Mumbai, migrations 0001–0006 run, `create_company` done.
+- [ ] Project in Mumbai, migrations 0001–0008 run, `create_company` done.
 - [ ] Auth settings in section 2, hook enabled, custom SMTP, templates.
 - [ ] Repeat `supabase/authcheck` by hand on the real project: sign-up refused for unknown e-mail, sign-up +
       confirm, resend, reset, sign-out, second device after reset, deactivate mid-session, reactivate.
 - [ ] Two companies, four roles each: repeat the isolation checks by hand (directory, departments, audit log).
 - [ ] `public/_headers` served (geolocation for this site only).
-- [ ] Decide invitation approach (section 3) and map/geocoder provider (section 4).
+- [ ] Send a real invitation from the hosted app; confirm the e-mail arrives (Inbox, not Spam) and links correctly.
+- [ ] Pilot on real phones (Android Chrome, iPhone Safari): permission prompt, accuracy indoors/outdoors, check-in inside/outside.
+- [ ] Choose map/geocoder provider (section 4). Company size ≤ ~100 for the pilot (section 3b).

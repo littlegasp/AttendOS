@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { BrandMark } from "@/components/AppSidebar";
 import { Button, FormInput } from "@/components/ui";
 import { BRAND } from "@/lib/brand";
@@ -9,19 +9,31 @@ import { friendlyError, isConfigured, supabase } from "@/lib/supabase";
 
 /** Opened from the reset email: the link signs the person in, then they choose a new password. */
 export default function ResetPasswordPage() {
+  return (
+    <Suspense>
+      <ResetPassword />
+    </Suspense>
+  );
+}
+
+/** Also the landing page of an invitation (?welcome=1): the link signed the person in; they choose a password. */
+function ResetPassword() {
   const router = useRouter();
+  const welcome = useSearchParams().get("welcome") === "1";
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!isConfigured()) return setError("This copy isn't connected to a database yet.");
-    const expired = "This reset link has expired or was already used. Ask for a new one from the sign-in page.";
+    const expired = welcome
+      ? "This invitation link has expired or was already used. Ask HR to send a new one, or use “Forgot password?” on the sign-in page."
+      : "This reset link has expired or was already used. Ask for a new one from the sign-in page.";
     const hash = new URLSearchParams(window.location.hash.slice(1));
     if (hash.get("error_code") || hash.get("error")) return setError(expired);
     const sb = supabase();
     sb.auth.getSession().then(({ data }) => (data.session ? setReady(true) : setError(expired)));
-  }, []);
+  }, [welcome]);
 
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -51,7 +63,8 @@ export default function ResetPasswordPage() {
       <div className="card glass elevated auth-card">
         <div className="auth-brand"><BrandMark /><strong>{BRAND.appName}</strong></div>
         <form onSubmit={save} noValidate className="form-grid">
-          <h1 className="section-title">Choose a new password</h1>
+          <h1 className="section-title">{welcome ? "Welcome — choose your password" : "Choose a new password"}</h1>
+          {welcome && ready ? <p className="meta">Your work e-mail is confirmed and linked to your employee record. Set a password to sign in next time.</p> : null}
           {error ? <div className="alert danger" role="alert">{error}</div> : null}
           {ready ? (
             <>

@@ -227,3 +227,14 @@ Migration `0006_leave_register_reports.sql` (shared with Phase 5), tests `supaba
 - Shift templates per department and bulk shift assignment by group are not built (per person + weekly pattern).
 - No Help guide inside the app yet (studio-crm has one; worth adding before go-live).
 - Employee Documents: planned, not built.
+
+## Stabilisation / production-readiness pass (19 Nov 2026, branch phase-4-5, not merged)
+No redesign, no new modules. Added: **employee invitations** (0007; see DEPLOYMENT.md §3) — the one item asked
+for that didn't exist. Hardening (0008): time-zone lookups only answer for the caller's own company; weekly
+roster/shift calls naming people outside the caller's HR scope now fail instead of silently doing nothing.
+Fixed: pages scrolled sideways on phones (screen-reader labels inside scroll areas escaped them).
+New checks: `supabase/tests/invitations_test.sql`, `supabase/tests/security_matrix_test.sql` (catalog rules +
+every table and callable function across roles and companies), `e2e/regression.py` (browser: GPS cases, HR
+workflows, exports, print, 208 screen loads), `supabase/perf/` (100/300/600 people). Status per feature:
+`docs/STATUS.md`; performance: `docs/PERFORMANCE.md`.
+Results: 356 database checks, 35 app checks, 36 real sign-in checks, 26 browser regression checks, all passing.

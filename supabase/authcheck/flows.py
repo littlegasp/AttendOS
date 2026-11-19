@@ -75,6 +75,13 @@ CORS = {"access-control-allow-origin": APP, "access-control-allow-credentials": 
 
 
 def route(r, req):
+  try:
+    _route(r, req)
+  except Exception:
+    pass  # page closed while a request was in flight
+
+
+def _route(r, req):
     url = req.url
     if req.method == "OPTIONS":
         return r.fulfill(status=204, headers=CORS)
@@ -182,6 +189,43 @@ with sync_playwright() as p:
     actor = sql("select a.source || '|' || u.email from audit_log a join employees e on e.id = a.actor_employee join auth.users u on u.id = a.actor "
                 "where a.target = 'employees' and a.action = 'insert' and a.after ->> 'email' = 'esha@acme.test'")
     check(actor == "app|admin@acme.test", "audit entry records the real signed-in Admin (from the Auth token)")
+
+    # ------------------------------------------------------------- 3b. invitation e-mail from the profile
+    admin.goto(APP + "/employees")
+    admin.get_by_role("button", name="Add employee").first.click()
+    admin.get_by_label("Full name").fill("Ravi Kumar")
+    admin.get_by_label("Work e-mail").fill("ravi@acme.test")
+    admin.locator(".dialog-actions").get_by_role("button", name="Add employee").click()
+    admin.wait_for_timeout(1500)
+    rid = sql("select id from employees where email = 'ravi@acme.test'")
+    admin.goto(APP + f"/employees?id={rid}")
+    admin.get_by_role("button", name="Send invite").click()
+    admin.get_by_text("Invitation sent").first.wait_for()
+    shot(admin, "a14-invite-sent")
+    im = wait_mail("ravi@acme.test", 1)
+    check(sql("select status || '|' || email from employee_invitations") == "sent|ravi@acme.test", f"invitation recorded and e-mailed only to the work address ({im['subject']})")
+    check(stored_session(admin)["user"]["email"] == "admin@acme.test", "sending the invitation leaves the Admin signed in as themselves")
+    admin.get_by_role("button", name="Send invite").click()
+    admin.get_by_text("wait 10 minutes").first.wait_for()
+    check(len(mails("ravi@acme.test")) == 1, "a second invitation within 10 minutes is refused (no duplicate e-mail)")
+    ictx, inv = new_page(browser, mobile=True)
+    inv.goto(link_in(im))
+    inv.wait_for_url(re.compile(r".*/reset-password\?welcome=1.*"), timeout=20000)
+    inv.get_by_text("Welcome — choose your password").wait_for()
+    inv.get_by_label("New password").fill("Ravi#start1")
+    inv.get_by_label("Type it again").fill("Ravi#start1")
+    shot(inv, "a15-invite-welcome")
+    inv.get_by_role("button", name="Save password").click()
+    wait_home(inv)
+    check(sql("select e.company_id = c.id and e.user_id = u.id from employees e join auth.users u on lower(u.email) = e.email join companies c on c.slug = 'acme' where e.email = 'ravi@acme.test'") == "t",
+          "invited person is linked to the right employee record and company")
+    check(sql("select status from employee_invitations order by id desc limit 1") == "accepted", "invitation marked accepted")
+    st, _ = api("/token?grant_type=password", {"email": "ravi@acme.test", "password": "Ravi#start1"})
+    check(st == 200, "the password chosen on the welcome page works")
+    inv.unroute_all(behavior="ignoreErrors"); ictx.close()
+    admin.goto(APP + f"/employees?id={rid}")
+    admin.get_by_text("Signs in with this e-mail").wait_for()
+    check(admin.get_by_role("button", name="Send invite").count() == 0, "once linked, the profile offers no further invitations")
 
     # ------------------------------------------------------------- 4. employee signs up on a phone and is linked
     ectx, emp = new_page(browser, mobile=True)
