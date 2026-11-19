@@ -19,7 +19,7 @@ advice; the pilot company decides what it must keep for its own legal duties.
 | Attendance: check-ins/outs, exact point (once per check-in/out), distance, accuracy, refused attempts, corrections | `public.attendance_*` | Yes | Deleted |
 | Leave requests, balances, adjustments | `public.leave_*` | Yes | Deleted |
 | Rosters, shift assignments, remote-work days, invitations | `public.*` | Yes | Deleted |
-| Activity log (who changed what) | `public.audit_log` | Yes — append-only; the app cannot change or delete it | Deleted with the company, after the export (§4) |
+| Activity log (who changed what) | `public.audit_log` | Yes — append-only in normal operation: no one using the app, of any role, can change or delete an entry | Removed only by the approved company-deletion procedure (§4), after the export |
 | Logins (e-mail, password hash, sessions) | Supabase Auth (`auth` schema) | While the person has a login | Deleted (§4 step 5) |
 | CSV / PDF exports | HR's devices | The company's responsibility | The company deletes its copies |
 | Owner's `pg_dump` copies | Owner's encrypted storage | 30 days each (export register below) | Deleted within 30 days |
@@ -50,7 +50,9 @@ the company may ask for exports or deletion.
 4. **Dry run:** `supabase/deploy/delete_company.sql` with the slug and `DRY RUN`. Check the company name, id and
    counts; confirm the count of logins to delete. Nothing changes.
 5. **Delete:** same script with the company id and `DELETE <slug>`. In one transaction it removes the company's
-   rows from all 21 tables (including its Activity log entries) and its logins in Supabase Auth (with their
+   rows from all 21 tables — including its Activity log entries, the one deliberate exception to the log being
+   append-only; the database owner switches the protection off for that transaction only and it is back on before
+   commit (tested) and its logins in Supabase Auth (with their
    sessions and identities). It compares **every other company's** row counts before and after and rolls
    everything back if anything outside this company changed. E-mails are unique across AttendOS and every
    login belongs to exactly one employee record, so no other company's login can be selected.

@@ -9,9 +9,21 @@ hosted setup, e-mail delivery and GPS on real phones, and the checklists exist t
 ## Shape
 - One company, **100 people or fewer**, one or a few offices.
 - **2–4 weeks.** For the first 2 weeks HR keeps its current attendance process in parallel and compares.
-- Built from tag `pilot-01-rc1` on `phase-4-5` (the commit with migration 0009 and this pack, or later). `main` is merged only after the pilot passes
+- Built from tag `pilot-01-rc1` = application commit `6d47386` (see Source below). `main` is merged only after the pilot passes
   its go-live review.
 - Owner keeps the Supabase and Cloudflare accounts; nobody at the pilot company gets dashboard access.
+
+## Source (application vs documentation)
+| What | Commit | Contains |
+|---|---|---|
+| **Application** | `6d4738643388ec8c8da302775f1f96ff0ce46415` (`6d47386`) | Front end (`src/`, `public/`, build config — unchanged since `e702229`), migrations 0001–0009, deploy scripts and tests. This is what is built, deployed and migrated. |
+| **This deployment pack (final)** | the documentation-only commit after it (hash printed on every page of the PDF) | Documents only. `git diff --stat 6d47386 <pack commit> -- src public supabase/migrations package.json package-lock.json next.config.ts wrangler.jsonc` prints nothing. |
+
+- `pilot-01-rc1` will point at the **application commit `6d47386`**, created only with the owner's approval
+  (01-DEPLOYMENT-CHECKLIST D3). Not created yet.
+- Documentation-only commits never get a new tag. Any change to the application (a fix found in the pilot) is a new
+  commit, tested, and tagged `pilot-01-rc2`, `rc3`…; earlier tags are never moved.
+- The first new migration after this pack is `0010_…`.
 
 ## Go / no-go before day 1
 - verify_hosted.sql: all 12 rows true; check_auth_links.sql: all 6 rows ok.

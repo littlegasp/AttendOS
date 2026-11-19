@@ -1,6 +1,7 @@
 # Pilot 01 — hosted deployment checklist (Supabase Mumbai + Cloudflare)
 
-Code: branch `phase-4-5` (stabilisation commit `e702229`, the Pilot 01 documents and the 0009 defect fix).
+Source: **application commit `6d47386`** on `phase-4-5` (front end as of `e702229`, migrations 0001–0009). This
+deployment pack is in a later, documentation-only commit (06-RECOMMENDATION.md "Source").
 **Status: PENDING — no step below has been done on a hosted project.** What has been tested locally is listed in
 `STATUS-LEGEND.md`. Do the steps in order; tick each box and note who did it and when (keep this file as the
 deployment log).
@@ -34,7 +35,7 @@ re-run that file from a fresh project or restore (see 05-ROLLBACK.md).
 | 2 | `0002_refinement.sql` | Shifts, breaks, overnight shifts, late/early/overtime, corrections, history | |
 | 3 | `0003_multi_tenant.sql` | Companies, company isolation, per-company time zone, login linking | |
 | 4 | `0004_employees.sql` | Employee IDs, designations, departments, roles, exit, people pickers | |
-| 5 | `0005_verification.sql` | Safe linking, Auth hook function, append-only audit, exit rules, switched-off references | |
+| 5 | `0005_verification.sql` | Safe linking, Auth hook function, append-only audit (in normal operation; see 07 §4 for company deletion), exit rules, switched-off references | |
 | 6 | `0006_leave_register_reports.sql` | Leave, register, reports, settings, user access | |
 | 7 | `0007_invitations.sql` | Employee invitations | |
 | 8 | `0008_hardening.sql` | Own-company time zone only; roster calls refuse people outside HR scope | |
@@ -54,7 +55,7 @@ re-run that file from a fresh project or restore (see 05-ROLLBACK.md).
 ## D. Front end (Cloudflare)
 - [ ] D1. Cloudflare Worker `attendos` (static assets from `out/`, `wrangler.jsonc`), custom domain e.g. `attendance.<company-domain>` or `pilot01.<your-domain>` with HTTPS.
 - [ ] D2. Build variables: exactly the two `NEXT_PUBLIC_*` values (02-ENVIRONMENT.md §1). Nothing else.
-- [ ] D3. Build and deploy `phase-4-5` (tag it `pilot-01-rc1` first). `npm run check` and `npm run build` must pass on that commit.
+- [ ] D3. With the owner's approval, tag the application commit — `git tag pilot-01-rc1 6d4738643388ec8c8da302775f1f96ff0ce46415 && git push origin pilot-01-rc1` — and build and deploy **that tag** (not the branch head). `npm run check` and `npm run build` must pass on it.
 - [ ] D4. Confirm in the browser: `/login` loads over HTTPS; response headers include `Permissions-Policy: … geolocation=(self)`; the built `out/` folder contains no secret key: `grep -rEl 'sb_secret_[A-Za-z0-9_-]{10,}|c2VydmljZV9yb2xl' out/` must list nothing (a real secret key, or a legacy service_role token — the bare word `sb_secret_` appears in Supabase's library code and is fine).
 
 ## E. Pilot company

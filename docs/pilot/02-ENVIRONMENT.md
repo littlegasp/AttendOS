@@ -78,12 +78,23 @@ invitation → `/reset-password?welcome=1`, reset → `/reset-password`).
 <p>The link works once and expires in 24 hours. If you didn't expect this, ignore this e-mail.</p>
 ```
 
-**Magic Link** (sent when a login already exists and is confirmed — e.g. HR re-invites someone who opened an
-earlier link while their access was switched off; since migration 0009 switching access back on links that login,
-and this e-mail just signs them in) — subject: `Your AttendOS sign-in link`
+**Which e-mail an invitation sends** (checked with the real Auth server):
+- New person, or an earlier invitation not yet opened (expired link, corrected e-mail): **Confirm signup**.
+  The link confirms the address, links the record and opens "Welcome — choose your password".
+- Person already linked: the app refuses to invite ("already has a login"); they sign in or use
+  "Forgot password?" (**Reset Password**). Since 0009 this includes someone who opened their link while switched
+  off — switching them back on links them.
+- **Magic Link** is sent only if Supabase Auth already holds a *confirmed* login for the address and the record is
+  not linked. In normal use that cannot happen; it can after a database restore, before the owner runs
+  `relink_logins.sql`. The link signs the person in and opens the same "Welcome — choose your password" page, but
+  it **does not link the record**: after saving a password they are told their login isn't linked yet. So after a
+  restore run `relink_logins.sql` first (05-ROLLBACK.md §2.4); HR re-invitations cannot repair links.
+
+**Magic Link** — subject: `Your AttendOS sign-in link`
 ```html
 <h2>Your AttendOS sign-in link</h2>
-<p><a href="{{ .ConfirmationURL }}">Open AttendOS</a> — you'll be asked to choose a password.</p>
+<p><a href="{{ .ConfirmationURL }}">Open AttendOS</a> and choose a password when asked.</p>
+<p>If AttendOS then says your login isn't linked yet, tell your HR team.</p>
 <p>The link works once and expires in 24 hours. If you didn't ask for this, ignore this e-mail.</p>
 ```
 
@@ -112,7 +123,7 @@ and this e-mail just signs them in) — subject: `Your AttendOS sign-in link`
 single-organisation tables with companies, 0005 replaces the linking trigger and stamps the audit log, 0006
 renames and wraps several functions (`punch`, `my_today`, `dashboard_summary`, `day_for`), 0008 wraps the roster
 functions, 0009 replaces the login-linking trigger. Running out of order, twice, or partially fails or leaves the database inconsistent — if that happens,
-restore (05-ROLLBACK.md) rather than patching by hand. Future changes always arrive as 0009, 0010…, never as edits.
+restore (05-ROLLBACK.md) rather than patching by hand. 0009 already exists, so future changes arrive as 0010, 0011…, never as edits to an existing file.
 
 ## 7. Map, address search and GPS — three separate things
 | Part | Used by | Provider | Needed for check-in? |

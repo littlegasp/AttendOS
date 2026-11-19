@@ -7,7 +7,9 @@
 | **HOSTED** | Tested on the hosted Supabase (Mumbai) + Cloudflare project. **Nothing is HOSTED yet.** |
 | **PENDING** | Not done yet; needs the owner's approval and/or the hosted project, real e-mail or real phones. |
 
-Nothing has been deployed, no hosted migration has run, no live company exists, no production credential has been
+Application commit: `6d47386` (to be tagged `pilot-01-rc1` on approval). Documents: the later documentation-only commit.
+
+Nothing has been deployed, no hosted migration has run, no tag has been created, no live company exists, no production credential has been
 created or changed, and `phase-4-5` is not merged into `main`.
 
 | Item | Done | Local | Hosted | Notes |
@@ -20,6 +22,7 @@ created or changed, and `phase-4-5` is not merged into `main`.
 | `delete_company.sql` | DONE | LOCAL — demo copy and real-Auth copy; other company unchanged (fingerprint + counts) | PENDING | 07 §4; test company T in 03 §12.5 |
 | Auth settings, hook, SMTP, templates | DONE (documented) | LOCAL (same settings on the Auth server) | PENDING | 02 §2–4 |
 | Invitations: send, expiry, re-invite, changed e-mail, duplicate, linked, other company | DONE | LOCAL — 26/26 | PENDING | 03 §2, 2b |
+| Which e-mail each invitation case sends; Magic Link landing page | DONE (documented) | LOCAL — Confirm signup for new/unconfirmed; Magic Link only for a confirmed unlinked login (restore case): asks for a password, does not link | PENDING | 02 §4 |
 | Session ending by SQL (no secret key) | DONE (documented) | LOCAL — refresh token refused after | PENDING | 05 §4.2 |
 | Key rotation, DB password reset, JWT key rotation | DONE (documented from Supabase docs) | — (Supabase dashboard only) | PENDING (only if needed) | 05 §4.1 |
 | Whole-database restore / restore to new project | DONE (documented) | — (Supabase feature) | PENDING — rehearse once (01 A5) | 05 §2.1–2.2 |

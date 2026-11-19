@@ -20,7 +20,8 @@ database (§2.1–2.2). The link between the two is `employees.user_id` → `aut
 login belongs to the employee whose work e-mail it confirmed.
 
 ## 0. Before any change (deploy, migration, settings)
-1. Git tag the code being deployed: `git tag pilot-01-rcN && git push origin pilot-01-rcN`.
+1. Know which application commit is deployed (tag `pilot-01-rcN`, see 06-RECOMMENDATION.md "Source"). Tags are
+   created only with the owner's approval and are never moved.
 2. Note the restore point: Database → Backups shows the last daily backup; with PITR note the current time (IST).
 3. Our own copy of the business data: `pg_dump "<session-pooler connection string>" -Fc -n public -f attendos-public-YYYYMMDD-HHMM.dump`
    (or `supabase db dump --data-only`). This is the only copy you can download — Supabase's physical backups can
@@ -76,7 +77,8 @@ deleted since the dump break, and the restore fails part-way.
 `relink_logins.sql` (owner, one transaction) fixes 1–4 with the app's own rule — unlink anything that doesn't
 match; link each active, unlinked record to the confirmed, unclaimed login with the same work e-mail. It never
 creates or deletes logins or touches passwords; each change goes to the Activity log as a system change.
-Then: people whose login no longer exists (deleted after the backup) get a new invitation from HR; row 6
+Run it before HR sends any re-invitations: a re-invitation to a confirmed login signs the person in but does not
+link the record (tested). Then: people whose login no longer exists (deleted after the backup) get a new invitation from HR; row 6
 leftovers are reviewed and deleted in Authentication → Users. Tested locally on a copy with the real Supabase
 Auth schema: a record restored without its link and a record restored with a link to a deleted login were both
 repaired, and all six checks returned 0.
