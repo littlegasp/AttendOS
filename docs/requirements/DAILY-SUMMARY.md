@@ -30,4 +30,4 @@ company's report slow everyone else in the shared project.
 - Monthly register and reports for 600 people / 30 days under 1 s; dashboard under 0.5 s.
 - A nightly consistency check reports any differences in the Activity log.
 - Existing screens, exports and numbers unchanged (compare CSVs before and after on the same data).
-- New numbered migration; no edit to 0001–0008.
+- New numbered migration; no edit to an existing migration.

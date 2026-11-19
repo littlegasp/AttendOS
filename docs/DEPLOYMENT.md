@@ -2,18 +2,19 @@
 
 > **Pilot 01 runbook:** follow `docs/pilot/01-DEPLOYMENT-CHECKLIST.md` step by step (with
 > `02-ENVIRONMENT.md`, `03-PILOT-TEST-CHECKLIST.md`, `04-KNOWN-LIMITATIONS.md`, `05-ROLLBACK.md`,
-> `06-RECOMMENDATION.md`). Scripts: `supabase/deploy/verify_hosted.sql` (read-only checks) and
-> `supabase/deploy/create_pilot_company.sql`. This page stays the background reference.
+> `06-RECOMMENDATION.md`, `07-DATA-RETENTION.md`, `STATUS-LEGEND.md`). Scripts in `supabase/deploy/`:
+> `verify_hosted.sql`, `check_auth_links.sql` (read-only), `create_pilot_company.sql`, `relink_logins.sql`,
+> `delete_company.sql`. This page stays the background reference.
 
 **AttendOS is not production-ready yet.** Nothing has run on a real Supabase project. What has been verified,
 and how:
 
 | Layer | Verified with | Not yet verified |
 |---|---|---|
-| Database rules (RLS, triggers, functions) | PostgreSQL 16, `npm run test:db` (all migrations, 356 checks incl. the security matrix) | Supabase's Postgres build and its built-in roles |
+| Database rules (RLS, triggers, functions) | PostgreSQL 16, `npm run test:db` (all migrations, 360 checks incl. the security matrix) | Supabase's Postgres build and its built-in roles |
 | REST API | PostgREST 12 (the layer Supabase uses) | Supabase's API gateway in front of it |
-| Sign-in and invitations | **Real Supabase Auth server** (`supabase/auth` v2.198.0 release binary) + real PostgREST, mail caught locally — `supabase/authcheck`, 36 browser checks |
-| App behaviour | `e2e/regression.py`: GPS cases, HR workflows, exports, print, 208 screen loads — 26 checks | Hosted Auth settings, real e-mail delivery (SMTP), rate limits, custom domain |
+| Sign-in and invitations | **Real Supabase Auth server** (`supabase/auth` v2.198.0 release binary) + real PostgREST, mail caught locally — `supabase/authcheck`, 36 browser checks, plus 26 invitation edge cases (`invite_edges.py`) |
+| App behaviour | `e2e/regression.py`: GPS cases, HR workflows, exports, print, 208 screen loads, map provider blocked — 29 checks | Hosted Auth settings, real e-mail delivery (SMTP), rate limits, custom domain |
 | Review screenshots | Real app build + PostgREST + PostgreSQL with sample data and signed test tokens | — |
 
 ### The simulated-token limitation (review screenshots)
@@ -26,7 +27,7 @@ to be checked once (section 5).
 ## 1. Supabase project (one for all companies)
 1. Create **one** project in **Mumbai (ap-south-1)**. Row level security keeps companies apart.
 2. SQL editor → run, in order, once each: `0001_attendance_core.sql`, `0002_refinement.sql`,
-   `0003_multi_tenant.sql`, `0004_employees.sql`, `0005_verification.sql`, `0006_leave_register_reports.sql`, `0007_invitations.sql`, `0008_hardening.sql`. Later changes come as new numbered files.
+   `0003_multi_tenant.sql`, `0004_employees.sql`, `0005_verification.sql`, `0006_leave_register_reports.sql`, `0007_invitations.sql`, `0008_hardening.sql`, `0009_link_on_reactivation.sql`. Later changes come as new numbered files.
 3. Create each company (owner only):
    `select public.create_company('Acme Industries', 'acme', 'Asia/Kolkata', 'owner@acme.in', 'Owner Name');`
 4. Cloudflare build variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (see `.env.example`).
@@ -91,10 +92,11 @@ Leaflet with **OpenStreetMap public tiles**; address search uses **Nominatim** f
 - Nominatim: at most about one request per second, identifiable traffic, **no type-ahead autocomplete**.
   AttendOS searches only when HR presses Search. For a multi-company service, plan a paid geocoder or self-host.
 - If a Content-Security-Policy is added to `public/_headers`, allow those hosts in `img-src` / `connect-src`.
-- Without tiles the screen still works (pin, radius and coordinates); check-in never uses maps or geocoding.
+- Without tiles the screen still works (pin, radius and coordinates); check-in never uses maps or geocoding —
+  the office check is computed by the database (tested with OpenStreetMap blocked; `docs/pilot/02-ENVIRONMENT.md` §7).
 
 ## 5. Before the first real company (checklist)
-- [ ] Project in Mumbai, migrations 0001–0008 run, `create_company` done.
+- [ ] Project in Mumbai, migrations 0001–0009 run, `create_company` done.
 - [ ] Auth settings in section 2, hook enabled, custom SMTP, templates.
 - [ ] Repeat `supabase/authcheck` by hand on the real project: sign-up refused for unknown e-mail, sign-up +
       confirm, resend, reset, sign-out, second device after reset, deactivate mid-session, reactivate.

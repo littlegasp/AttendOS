@@ -1,5 +1,5 @@
 -- AttendOS: create the Pilot 01 company. Run ONCE in the hosted SQL editor (as the project owner), after
--- migrations 0001–0008 and verify_hosted.sql all show ok. Replace the four values in the first block first.
+-- migrations 0001–0009 and verify_hosted.sql all show ok. Replace the four values in the first block first.
 -- It creates the company and its first Admin employee record only — no login is created here: the Admin signs
 -- up afterwards at https://<site>/login?company=<slug> with exactly this e-mail.
 begin;

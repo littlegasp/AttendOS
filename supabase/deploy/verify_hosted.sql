@@ -1,4 +1,4 @@
--- AttendOS: read-only checks to run in the hosted Supabase SQL editor AFTER migrations 0001–0008.
+-- AttendOS: read-only checks to run in the hosted Supabase SQL editor AFTER migrations 0001–0009.
 -- Changes nothing. Every row should show ok = true. Safe to run any number of times.
 with
 tables as (
@@ -29,8 +29,9 @@ checks(item, ok, detail) as (
   select '7. Login-linking triggers on auth.users',
          (select count(*) from pg_trigger where tgrelid = 'auth.users'::regclass and tgname in ('on_auth_user_created', 'on_auth_user_confirmed')) = 2, ''
   union all
-  select '8. Latest migration present (0008: guarded roster function)',
-         exists (select 1 from fns where proname = 'set_roster_pattern_core') and exists (select 1 from fns where proname = 'prepare_invitation'), ''
+  select '8. Latest migrations present (0007 invitations, 0008 guarded roster, 0009 link on reactivation)',
+         exists (select 1 from fns where proname = 'set_roster_pattern_core') and exists (select 1 from fns where proname = 'prepare_invitation')
+         and exists (select 1 from pg_trigger where tgname = 'zz_link_existing_login' and pg_get_triggerdef(oid) like '%UPDATE OF email, active%'), ''
   union all
   select '9. Auth hook function exists and Auth may call it',
          exists (select 1 from fns where proname = 'hook_before_user_created')

@@ -13,6 +13,9 @@ Supabase project — **nothing is yet, because no hosted project exists.** **Pen
 | Password reset (signs out other devices) | ✓ | ✓ real Auth | — | — |
 | **Employee invitations** (Send invite → one-time link → set password) | ✓ new | ✓ real Auth: correct company + record, no duplicates in 10 min, sender stays signed in | — | Branded invite wording in the e-mail template |
 | Login ↔ employee linking (confirmed work e-mail only, never twice) | ✓ | ✓ DB tests + real Auth | — | — |
+| Invitation edge cases: expired, re-invite, changed e-mail, duplicate, already linked, other company | ✓ (0009 fixes reactivation linking) | ✓ real Auth: `supabase/authcheck/invite_edges.py` 26/26 | — | Test checklist 2b on hosted |
+| Restore consistency, company deletion (owner scripts) | ✓ `supabase/deploy/` | ✓ local copies incl. real Auth schema | — | Rehearse restore; delete test company on hosted |
+| Office check independent of map / address-search provider | ✓ | ✓ OpenStreetMap blocked in the browser regression | — | — |
 | Multi-company isolation | ✓ | ✓ security matrix: 21 tables × 6 users, all writes, 11 functions with other-company ids, catalog rules | — | Repeat a manual spot-check on hosted |
 | Roles (Admin / HR / Manager / Employee) enforced in the database | ✓ | ✓ per-role scope checks | — | — |
 | Audit log (append-only, real actor, sample-data marking) | ✓ | ✓ | — | — |

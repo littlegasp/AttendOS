@@ -145,7 +145,7 @@ with sync_playwright() as p:
     pg = c.go("/my-attendance")
     pg.get_by_role("button", name="Check In").click()
     pg.wait_for_timeout(2500)
-    check(events("f6") == 0 and attempts("f6", "outside_area") >= 1, "outside the office area (~1.8 km): refused and logged")
+    check(events("f6") == 0 and attempts("f6", "outside_area") >= 1, "outside the office area (~2 km): refused and logged")
     c.close()
 
     c = Ctx(br, "f6", block="/rpc/punch")
@@ -156,7 +156,19 @@ with sync_playwright() as p:
     pg.screenshot(path=f"{OUT}/g03-offline.png")
     c.close()
 
+    # The office check is done by the database, not the browser: a forged call with a precise but far-away
+    # position is refused, whatever the page or the map shows.
+    try:
+        rpc("punch", {"p_kind": "in", "p_lat": FAR["latitude"], "p_lng": FAR["longitude"], "p_accuracy": 5}, "f6")
+    except Exception:
+        pass
+    check(events("f6") == 0 and attempts("f6", "outside_area") >= 2, "a direct API call claiming 5 m accuracy far from the office is refused by the server")
+
+    # Map tiles and address search (OpenStreetMap) are switched off for the rest of the GPS checks:
+    # check-in must not depend on them.
     c = Ctx(br, "f6", geo=HQ)
+    osm = []
+    c.ctx.route(re.compile(r"openstreetmap\.org"), lambda r, req: (osm.append(req.url), r.abort("internetdisconnected")))
     pg = c.go("/my-attendance")
     before = pg.evaluate("window.__geo")
     pg.get_by_role("button", name="Check In").click()
@@ -172,6 +184,15 @@ with sync_playwright() as p:
     pg.get_by_role("button", name="Check Out").click()
     pg.wait_for_timeout(2500)
     check(pg.evaluate("window.__geo") - before == 2 and pg.evaluate("window.__watch") == 0, "check-out reads it once more; nothing ever tracks in the background (no watchPosition)")
+    check(osm == [], "check-in and check-out worked with the map and address-search provider unreachable (no request made to it)")
+    c.close()
+
+    # HR's office setup with OpenStreetMap down: the map says so; coordinates can still be typed and saved.
+    c = Ctx(br, "a1")
+    c.ctx.route(re.compile(r"openstreetmap\.org"), lambda r, req: r.abort("internetdisconnected"))
+    pg = c.go("/settings")
+    pg.get_by_text(re.compile("Map pictures couldn.t load")).first.wait_for(timeout=15000)
+    check(pg.get_by_role("table").first.is_visible(), "office settings with the map provider down: offices listed, map shows a clear note")
     c.close()
 
     # Several offices: Pooja is rostered at the Pune plant today

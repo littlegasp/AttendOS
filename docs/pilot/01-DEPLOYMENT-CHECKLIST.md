@@ -1,20 +1,28 @@
 # Pilot 01 — hosted deployment checklist (Supabase Mumbai + Cloudflare)
 
-Code: branch `phase-4-5` (stabilisation commit `e702229` + these documents). **Nothing below has been done yet.**
-Do the steps in order; tick each box and note who did it and when (keep this file as the deployment log).
-Don't run any step against a live project without the owner's go-ahead.
+Code: branch `phase-4-5` (stabilisation commit `e702229`, the Pilot 01 documents and the 0009 defect fix).
+**Status: PENDING — no step below has been done on a hosted project.** What has been tested locally is listed in
+`STATUS-LEGEND.md`. Do the steps in order; tick each box and note who did it and when (keep this file as the
+deployment log).
+
+> **Approval gate.** Creating the hosted project, running migrations on it, creating the live pilot company,
+> setting or changing any production credential, deploying to Cloudflare and merging `phase-4-5` into `main` each
+> need the owner's explicit written approval first. Record it next to the step.
 
 > **Never run on the hosted project:** `supabase/tests/*` (they create a fake `auth` schema and would break
 > Supabase Auth), `supabase/demo/*` (sample companies) and `supabase/perf/*` (synthetic data). Only the files
-> listed in step B and the two scripts in `supabase/deploy/`.
+> listed in step B and the scripts in `supabase/deploy/` (`verify_hosted.sql`, `check_auth_links.sql` and
+> `create_pilot_company.sql` here; `relink_logins.sql` and `delete_company.sql` only as 05-ROLLBACK.md and
+> 07-DATA-RETENTION.md describe).
 
 ## A. Accounts and project
 - [ ] A1. Supabase organisation: every member uses MFA; only the owner and one backup person are Owners.
 - [ ] A2. Create **one** project: region **South Asia (Mumbai) — ap-south-1**, plan **Pro** (Free projects pause when idle and have no restorable backups — not suitable for a pilot). Strong database password → stored in the owner's password manager only.
-- [ ] A3. Note the project URL `https://<ref>.supabase.co` and the **publishable key** (`sb_publishable_…`, Project Settings → API Keys). Do not copy the secret key anywhere — AttendOS doesn't need it.
-- [ ] A4. Backups: Pro daily backups are on; decide whether to add Point-in-Time Recovery for the pilot (recommended if the pilot company relies on it daily).
+- [ ] A3. Note the project URL `https://<ref>.supabase.co` and the **publishable key** (`sb_publishable_…`, Project Settings → API Keys). Do not copy any secret key (`sb_secret_…`) or the legacy `service_role` key anywhere — AttendOS doesn't use them. If the project shows legacy keys, leave them unused; the app works with the publishable key alone (02-ENVIRONMENT.md §1).
+- [ ] A4. Backups: Pro daily backups are on (kept 7 days on Pro). Decide on Point-in-Time Recovery (recommended for the pilot: restore to the minute instead of losing up to a day). Write down the retention window — 07-DATA-RETENTION.md uses it.
+- [ ] A5. Rehearse a restore once, before real data: Database → Backups → **Restore to a new project** into a throwaway project, run `verify_hosted.sql` and `check_auth_links.sql` there, note how long it took, then delete that project (05-ROLLBACK.md §2).
 
-## B. Database migrations (0001 → 0008, each exactly once, in order)
+## B. Database migrations (0001 → 0009, each exactly once, in order)
 Run each file whole. Either paste it into **SQL Editor → New query → Run**, or from a laptop with `psql`:
 `psql "<session-pooler connection string>" -v ON_ERROR_STOP=1 --single-transaction -f supabase/migrations/000N_….sql`
 (use the Session pooler string if the network has no IPv6). If a file fails, stop — don't run the next one; fix and
@@ -30,8 +38,9 @@ re-run that file from a fresh project or restore (see 05-ROLLBACK.md).
 | 6 | `0006_leave_register_reports.sql` | Leave, register, reports, settings, user access | |
 | 7 | `0007_invitations.sql` | Employee invitations | |
 | 8 | `0008_hardening.sql` | Own-company time zone only; roster calls refuse people outside HR scope | |
+| 9 | `0009_link_on_reactivation.sql` | Defect fix: a login confirmed while access was off links when access is switched back on | |
 
-- [ ] B9. Run `supabase/deploy/verify_hosted.sql` (read-only). All rows `ok = true` except **9** until step C3 is done. Save the result.
+- [ ] B10. Run `supabase/deploy/verify_hosted.sql` (read-only). All rows `ok = true` except **9** until step C3 is done. Save the result.
 
 ## C. Authentication (Dashboard → Authentication) — values in 02-ENVIRONMENT.md §2
 - [ ] C1. URL Configuration: Site URL and the two redirect URLs.
@@ -53,10 +62,11 @@ re-run that file from a fresh project or restore (see 05-ROLLBACK.md).
 - [ ] E2. The Admin opens `https://<site>/login?company=<slug>` → **First time here? Create your login** with exactly that e-mail → confirms the e-mail → lands on the Dashboard as Admin.
 - [ ] E3. Admin: Settings → General (name, logo, date format, half-day rule, leave year), Locations & GPS (offices on the map, radius, accuracy limit, weekly offs), Shifts, Holidays, Departments/Designations, Leave Types.
 - [ ] E4. Admin adds the HR person(s) with role HR and invites them; HR then adds and invites everyone else (03-PILOT-TEST-CHECKLIST.md).
-- [ ] E5. Re-run `verify_hosted.sql`: all rows `true`.
+- [ ] E5. Re-run `verify_hosted.sql` (all rows `true`) and `check_auth_links.sql` (all rows `ok`).
 
 ## F. Go / no-go for day 1
 - [ ] F1. Sections A–E done and logged.
 - [ ] F2. 03-PILOT-TEST-CHECKLIST.md sections 1–4 passed on the hosted site.
-- [ ] F3. Rollback rehearsed: the previous Cloudflare version is known; a manual database backup (`pg_dump` or dashboard backup) taken after E5.
+- [ ] F3. Rollback ready: the previous Cloudflare version is known; restore rehearsed (A5); a database backup taken after E5 (dashboard backup or PITR point noted, plus a `pg_dump` of the `public` schema — 05-ROLLBACK.md §0).
+- [ ] F4a. 07-DATA-RETENTION.md agreed in writing with the pilot company (how long data is kept, who may export, what happens at the end).
 - [ ] F4. Owner's written go-ahead recorded here: ____________________ (name / date)

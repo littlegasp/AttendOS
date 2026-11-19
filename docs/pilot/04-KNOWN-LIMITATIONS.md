@@ -1,5 +1,11 @@
 # Known limitations (Pilot 01)
 
+What is done, locally tested, hosted-tested or pending, item by item: STATUS-LEGEND.md.
+
+**Fixed in this pass:** someone who opened their invitation while HR had switched them off could never be linked
+(found by the new invitation edge-case check). Migration `0009_link_on_reactivation.sql` links them when access is
+switched back on. Locally tested; it ships with the other migrations.
+
 Tell the pilot company about these before day 1. None blocks a pilot of up to about 100 people; each one says
 what to do about it.
 
@@ -11,6 +17,9 @@ what to do about it.
 | Publishable key (`sb_publishable_…`) in the `…_ANON_KEY` variable | Expected to work with supabase-js; not tried on hosted | Sign in once; if it fails, use the legacy anon key for the pilot |
 | GPS on real phones | Tested with simulated positions in the browser | Section 4 of the test checklist, Android and iPhone, indoors and outdoors |
 | E-mail delivery | Tested with a local mail catcher | Send to Gmail and Outlook; check Inbox, not Spam |
+| Invitation edge cases (expired, re-invite, changed e-mail, duplicate, already linked, other company) | 26/26 locally with the real Auth server | Test checklist 2b |
+| Restore of a whole database (backup / PITR) | Not possible locally (Supabase feature) | Rehearse once into a new project (deployment checklist A5) |
+| Login/record consistency repair and company deletion scripts | Tested on local copies, incl. the real Auth schema | Company deletion on test company T (test checklist 12.5) |
 
 ## Size and speed
 - Monthly register and reports work out every person-day on request (about 0.9 ms each). Measured: 100 people
@@ -30,7 +39,14 @@ what to do about it.
 - Fixed roles (Admin, HR, Manager, Employee); no custom roles.
 - No scheduled or e-mailed reports.
 - Export is CSV (opens in Excel); PDF is the browser's Print → Save as PDF.
-- Maps and address search use the free OpenStreetMap services (fair-use limits; fine for setting up offices).
+- Maps and address search use the free OpenStreetMap services: no availability guarantee, about one address
+  search per second, no autocomplete, attribution required. They are used only by HR when placing offices; the
+  check-in decision is made by the database and does not depend on them (tested with them blocked). Details and
+  alternatives: 02-ENVIRONMENT.md §7.
+- No in-app deletion of one person's data; company deletion and exports of a whole company are owner-run
+  (07-DATA-RETENTION.md).
+- No secret-key server functions (by design): anything needing one — e.g. a branded "Invite user" e-mail via
+  the Auth admin API — is not built.
 
 ## Behaviour to explain to the pilot company
 - GPS is read only when someone presses Check In or Check Out, never in the background.

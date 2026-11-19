@@ -249,3 +249,13 @@ timeout is never raised as a workaround; the app uses only the URL and the publi
 `phase-4-5` is not merged into `main` until the hosted checks pass. Correction: there are 21 tables (an earlier
 report said 22).
 Next: owner's go-ahead → hosted setup (checklist A–F) → pilot.
+
+## Pilot 01 safety pass (19 Nov 2026, documents + one defect fix — nothing deployed)
+Restore scenarios separated (whole-database backup/PITR restores `auth` too; a `public` dump never restores
+logins; never `pg_restore --clean` over live) with `check_auth_links.sql` / `relink_logins.sql`; key incident
+response (publishable key is public by design; secret/service_role, database password and JWT signing key are the
+critical ones; session ending by SQL, no secret key); company retention and deletion (`07-DATA-RETENTION.md`,
+`delete_company.sql` with dry run and an other-companies-unchanged check); map/address search separated from the
+server-side office check. New checks: `supabase/authcheck/invite_edges.py` (26), `supabase/tests/relink_test.sql`,
+3 browser checks. Defect found and fixed: a login confirmed while access was off never linked —
+`0009_link_on_reactivation.sql`. Status per item: `docs/pilot/STATUS-LEGEND.md`.

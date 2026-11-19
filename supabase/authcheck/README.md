@@ -21,3 +21,6 @@ gateway in front of Auth/REST, custom domain). Those are checked on the real pro
    secret in `postgrest.conf` (role `anon`), serve `out/` on `127.0.0.1:4175` with clean URLs.
 4. `JWT_EXP=60 AUTH_DIR=… sh start.sh` then `JWT_EXP=60 python3 flows.py http://127.0.0.1:4175 shots`.
    `JWT_EXP=60` makes access tokens expire after a minute so renewal and sign-out of other devices are tested.
+5. Invitation edge cases (no browser; run `start.sh` again first, it resets the database):
+   `python3 invite_edges.py` — expired link, re-invite, changed work e-mail, duplicate, already linked,
+   confirmed-while-switched-off, other company. 26 checks.

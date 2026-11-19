@@ -1,12 +1,15 @@
 # Pilot 01 — verification checklist (hosted site)
 
-Run on the hosted site after 01-DEPLOYMENT-CHECKLIST.md. Use real people and real phones. Record Pass/Fail,
+Status: **PENDING — not run yet** (it can only be run on the hosted site). Every behaviour below has a matching
+local check that passes (STATUS-LEGEND.md); this checklist proves it on the real project, real e-mail and real
+phones. Run on the hosted site after 01-DEPLOYMENT-CHECKLIST.md. Use real people and real phones. Record Pass/Fail,
 the device/browser and a screenshot for anything that fails. Sections 1–4 must pass before day 1; the rest during
 the first week.
 
 People needed: **A** Admin, **H** HR, **M** a manager with 2+ reports, **E1/E2** employees (one Android, one iPhone),
-**X** an outside test address that is not an employee. For section 12 a second test company **T** (created with
-`create_pilot_company.sql`, deactivated after the test).
+**X** an outside test address that is not an employee, **Y** a second test mailbox HR can add and change. For
+section 12 a second test company **T** (created with `create_pilot_company.sql`, deleted afterwards with
+`delete_company.sql` — owner's approval).
 
 ## 1. Admin setup
 | # | Step | Expected | Result |
@@ -25,6 +28,18 @@ People needed: **A** Admin, **H** HR, **M** a manager with 2+ reports, **E1/E2**
 | 2.3 | H adds M (role set by A), E1, E2 with work e-mails, departments, manager, office, shift | Employee IDs E000x; Sign-in "No login yet" | |
 | 2.4 | H invites E1, E2, M | One e-mail each, Inbox | |
 | 2.5 | H tries to give someone the Manager role | Refused (Admin only) | |
+
+## 2b. Invitation edge cases (locally tested with the real Auth server: `supabase/authcheck/invite_edges.py`, 26/26)
+| # | Step | Expected | Result |
+|---|---|---|---|
+| 2b.1 | H adds Y, invites, waits until the link is over 24 h old, then opens it | "Link has expired or was already used"; Y not linked | |
+| 2b.2 | H presses Send invite again for Y (after 10 min) and Y opens the new e-mail | Same login reused (no second account); Y linked to this company; both invitations show Accepted | |
+| 2b.3 | H adds Y2 with a mistyped e-mail, invites, then corrects the e-mail before Y2 opens it; Y2 opens the old e-mail anyway | Old link gives no access and sees no data; the next invitation goes only to the corrected address and links | |
+| 2b.4 | H invites someone already linked | Refused: "already has a login" | |
+| 2b.5 | H tries to change the e-mail of a linked person | Refused: "linked to a login" | |
+| 2b.6 | H switches Y3 off, Y3 opens their invitation, H switches Y3 back on | Y3 can sign in and is linked after being switched on (migration 0009); while off, nothing is granted | |
+| 2b.7 | T's Admin tries to add a person with an e-mail already used by the pilot company | Refused (one e-mail belongs to one company) | |
+| 2b.8 | Owner runs `check_auth_links.sql` | All six rows `ok` | |
 
 ## 3. Password setup and sign-in
 | # | Step | Expected | Result |
@@ -46,6 +61,7 @@ People needed: **A** Admin, **H** HR, **M** a manager with 2+ reports, **E1/E2**
 | 4.6 | Airplane mode, press Check In | "Couldn't reach the server"; works after reconnecting | |
 | 4.7 | Remote day (H sets a remote exception) | Check in from home accepted as Remote | |
 | 4.8 | Check Out | Worked time correct; location read once | |
+| 4.9 | Map provider unavailable: on a laptop, block `openstreetmap.org` (e.g. browser DevTools → Network request blocking) and check in on that device | Check-in works exactly the same; Settings → Locations shows "Map pictures couldn't load…", offices still listed and editable by coordinates | |
 
 ## 5. Breaks and shifts
 | # | Step | Expected | Result |
@@ -112,5 +128,7 @@ People needed: **A** Admin, **H** HR, **M** a manager with 2+ reports, **E1/E2**
 | 12.2 | T's Admin opens a pilot employee's profile link | "This person isn't available" | |
 | 12.3 | Pilot H searches for T's people | Nothing | |
 | 12.4 | Run `verify_hosted.sql` again | All rows true | |
+| 12.5 | Owner deletes T: `delete_company.sql` dry run, then `DELETE <T slug>` (07-DATA-RETENTION.md §4) | Only T's rows and logins removed; "other companies before = after" on every row; pilot company works normally | |
+| 12.6 | `verify_hosted.sql` and `check_auth_links.sql` | All true / ok | |
 
 Sign-off: ____________________ (owner) ____________________ (pilot company HR) Date: __________
