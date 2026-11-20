@@ -310,5 +310,8 @@ shift-gap warning). Revision 3 (20 Nov 2026): held punches re-evaluated at any a
 bounded queue budget; a hold released after the 2-day window needs a new individual HR acceptance; company-local dates;
 null-safe authentication gate. Revision 4 (20 Nov 2026): held punches that are not due are never touched when
 another punch brings their day in; each employee-day call is limited to 200 writes with continuation marks, and the
-queue has run-level write budgets. Still design only; awaiting final approval before 0012 is written.
+queue has run-level write budgets. Revision 5 (20 Nov 2026): the guard re-validates the whole attribution tuple
+(time, raw punch, device, import batch, device office) against the raw punch on any change; write budgets are strict
+(no lower clamp, one write reserved for continuation, slot step all-or-nothing, fewer than 6 writes → day deferred);
+a failed call costs one error record. Still design only; awaiting final approval before 0012 is written.
 
