@@ -99,7 +99,7 @@ Details: BIOMETRIC_DATABASE_SCHEMA.md.
 6. **Re-projection** must never undo HR corrections.
 7. **Performance** — reports already compute every person-day on request (docs/PERFORMANCE.md); biometric adds rows
    but no new per-day cost; the daily summary table remains the scaling fix.
-Full list with mitigations: BIOMETRIC_SYSTEM_ARCHITECTURE.md §9.
+Full list with mitigations: BIOMETRIC_SYSTEM_ARCHITECTURE.md §10.
 
 ## 9. Proposed sequence
 B1 (this) → owner review → B2 device management UI on mock data → B3 gateway → B4 Sync Agent → B5 first real
