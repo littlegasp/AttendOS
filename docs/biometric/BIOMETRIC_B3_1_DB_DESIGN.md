@@ -1,6 +1,6 @@
 # Biometric B3.1 — database foundation audit and design
 
-Status: **revision 5 (20 Nov 2026)** — B3.3 review corrections (§13.8). Revision 4 — B3.2 approved for local development; **B3.3 gateway implemented locally (§13)**. Earlier: B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
+Status: **revision 5.1 (20 Nov 2026)** — B3.3 approved for local development; §13.7 test figures corrected to match the revision 5 evidence ZIP (633 / 79 / 18), no code changed. Revision 5 — B3.3 review corrections (§13.8). Revision 4 — B3.2 approved for local development; **B3.3 gateway implemented locally (§13)**. Earlier: B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
 `supabase/migrations/0010_biometric_core.sql` (§12). No SQL has been run against any Supabase project; no application
 code changed; no extension installed on any hosted project. Baseline: branch `feature/biometric-b1`, commit `d8146c9` (B2 approved). Starting point:
 BIOMETRIC_DATABASE_SCHEMA.md (B1 r2/r3). Every finding below was checked against the migrations 0001–0009, the test
@@ -599,12 +599,16 @@ gateway-level option is a Cloudflare Worker with rate limiting in front of the t
   longer flood the audit log); configuration changes are still audited.
 - `verify_hosted.sql` check 4 accepts the two gateway functions once 0011 is installed.
 
-### 13.7 Tests (all executed locally)
-`biometric_gateway_test.sql` 67 checks · `concurrency/gateway_proof.sh` 6 (concurrent replay, overlapping batches,
-batch vs end-mapping, batch vs back-dated mapping, 40 parallel batches → exactly 30 accepted, 5 deadlock rounds) ·
-`e2e/biometric_gateway_http.py` 13 over real HTTP (PostgREST 12.2.3): anon ingest, X-Forwarded-For address, replay,
-generic refusals, size cap, GET refused, heartbeat and throttle, the key absent from the PostgREST log, the Postgres
-server log, audit log, sync-run answers and error records.
+### 13.7 Tests (all executed locally; figures as in the revision 5 evidence ZIP, commit 83e390a)
+Full database suite **633** checks (existing 360 + Supabase-defaults setup 1 + biometric core 193 + gateway 79) ·
+`biometric_gateway_test.sql` **79** checks · `concurrency/gateway_proof.sh` **6** (concurrent replay, overlapping
+batches, batch vs end-mapping, batch vs back-dated mapping, 40 parallel batches → exactly 30 accepted, 5 deadlock
+rounds) · `concurrency/lock_proof.sh` **21** (B3.2 proofs re-run) · `e2e/biometric_gateway_http.py` **18** over real
+HTTP (PostgREST 12.2.3): anon ingest, X-Forwarded-For telemetry and spoofing, replay, generic refusals, size cap,
+null-safe malformed events, device-derived source_auth, GET refused, heartbeat and throttle, anonymous grants, the
+key absent from the PostgREST log, the Postgres server log, audit log, sync-run answers and error records · company
+deletion **4** · app regression **29** · app checks **53** · clean migration 0001–0011 without errors.
+(Revision 4 of this section listed the earlier counts 67 gateway / 13 HTTP / 621 database; corrected here.)
 
 ### 13.8 Revision 5 — what the gateway can and cannot prove (B3.3 review, 20 Nov 2026)
 | Fact | Proven? | How |
