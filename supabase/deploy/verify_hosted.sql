@@ -1,4 +1,4 @@
--- AttendOS: read-only checks to run in the hosted Supabase SQL editor AFTER migrations 0001–0009.
+-- AttendOS: read-only checks to run in the hosted Supabase SQL editor AFTER migrations 0001–0009 (and 0010 when installed).
 -- Changes nothing. Every row should show ok = true. Safe to run any number of times.
 with
 tables as (
@@ -7,7 +7,8 @@ tables as (
 fns as (
   select p.oid, p.proname, p.prosecdef, p.proconfig, p.proacl from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'),
 checks(item, ok, detail) as (
-  select '1. 21 AttendOS tables exist', (select count(*) from tables) = 21, (select string_agg(relname, ', ' order by relname) from tables)
+  select '1. AttendOS tables exist (21; 32 with biometric 0010)', (select count(*) from tables) = 21 + (select count(*) from tables where relname like 'biometric%')
+           and (select count(*) from tables where relname like 'biometric%') in (0, 11), (select string_agg(relname, ', ' order by relname) from tables)
   union all
   select '2. Row level security is on for every table', not exists (select 1 from tables where not relrowsecurity),
          coalesce((select string_agg(relname, ', ') from tables where not relrowsecurity), 'all on')
@@ -47,5 +48,13 @@ checks(item, ok, detail) as (
   union all
   select '12. No sample/demo data present', not exists (select 1 from public.companies where slug in ('acme', 'beta', 'gamma', 'perf'))
          and not exists (select 1 from public.audit_log where source = 'seed'), 'demo/perf scripts must never run here'
+  union all
+  select '13. Biometric 0010 (if installed): credentials unreadable, payload columns not granted, 12 checked functions only',
+         case when to_regclass('public.biometric_raw_events') is null then true else
+           not has_table_privilege('authenticated', to_regclass('public.biometric_agent_credentials'), 'select')
+           and not has_column_privilege('authenticated', to_regclass('public.biometric_raw_events'), 'raw_payload', 'select')
+           and not has_column_privilege('authenticated', to_regclass('public.biometric_event_errors'), 'payload', 'select')
+           and (select count(*) from fns where proname like 'biometric\_%' and has_function_privilege('authenticated', oid, 'execute')) = 12 end,
+         case when to_regclass('public.biometric_raw_events') is null then 'not installed' else 'installed' end
 )
 select item, ok, detail from checks order by split_part(item, '.', 1)::int;

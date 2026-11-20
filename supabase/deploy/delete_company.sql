@@ -6,7 +6,7 @@
 --   2. Delete   — set del.confirm to exactly 'DELETE <slug>' and run again. Everything happens in one
 --                 transaction: if any check fails, nothing is deleted.
 -- Safety checks: the slug and the company id must both match the same company; every other company's row
--- counts (all 21 tables and their logins) are compared before and after, and the transaction is aborted if
+-- counts (all 32 tables and their logins) are compared before and after, and the transaction is aborted if
 -- any of them changed. Save the result grid (the deletion evidence) with the deletion record.
 -- Note: tables are locked for a few seconds while this runs; run it in a quiet hour.
 
@@ -31,18 +31,27 @@ declare
   tables text[] := array['companies','employees','departments','designations','locations','shifts','holidays',
     'leave_types','leave_requests','leave_adjustments','attendance_events','attendance_coords','attendance_attempts',
     'attendance_corrections','roster_day','roster_pattern','shift_day','shift_pattern','remote_exceptions',
-    'employee_invitations','audit_log'];
+    'employee_invitations','audit_log',
+    'biometric_event_state','biometric_event_reviews','biometric_event_errors','biometric_raw_events','biometric_sync_runs',
+    'biometric_employee_mappings','biometric_devices','biometric_agent_credentials','biometric_agents','biometric_import_batches',
+    'biometric_settings'];
   -- how each table reaches its company
   scope jsonb := jsonb_build_object(
     'companies', 'id = $1',
     'attendance_coords', 'event_id in (select e.id from public.attendance_events e join public.employees p on p.id = e.employee_id where p.company_id = $1)',
     'employees', 'company_id = $1', 'departments', 'company_id = $1', 'designations', 'company_id = $1',
     'locations', 'company_id = $1', 'shifts', 'company_id = $1', 'holidays', 'company_id = $1',
-    'leave_types', 'company_id = $1', 'audit_log', 'company_id = $1');
+    'leave_types', 'company_id = $1', 'audit_log', 'company_id = $1',
+    'biometric_event_state', 'company_id = $1', 'biometric_event_reviews', 'company_id = $1', 'biometric_event_errors', 'company_id = $1',
+    'biometric_raw_events', 'company_id = $1', 'biometric_sync_runs', 'company_id = $1', 'biometric_employee_mappings', 'company_id = $1',
+    'biometric_devices', 'company_id = $1', 'biometric_agent_credentials', 'company_id = $1', 'biometric_agents', 'company_id = $1',
+    'biometric_import_batches', 'company_id = $1', 'biometric_settings', 'company_id = $1');
   cond text;
   logins uuid[];
 begin
   if v_slug like 'replace%' then raise exception 'Fill in del.slug first'; end if;
+  -- tables of modules not installed on this database (e.g. biometric before 0010) are skipped
+  tables := array(select x from unnest(tables) x where to_regclass('public.' || x) is not null);
   select id into cid from public.companies where slug = v_slug;
   if cid is null then raise exception 'No company with the address "%"', v_slug; end if;
   doit := v_conf = 'DELETE ' || v_slug;
@@ -76,6 +85,20 @@ begin
   update public.departments set head_id = null where company_id = cid;
   update public.employees set manager_id = null where company_id = cid;
   update public.companies set default_shift_id = null where id = cid;
+  -- biometric (0010, when installed): children before parents; processing state first (it points at attendance events)
+  if to_regclass('public.biometric_raw_events') is not null then
+  delete from public.biometric_event_state where company_id = cid;
+  delete from public.biometric_event_reviews where company_id = cid;
+  delete from public.biometric_event_errors where company_id = cid;
+  delete from public.biometric_raw_events where company_id = cid;
+  delete from public.biometric_sync_runs where company_id = cid;
+  delete from public.biometric_employee_mappings where company_id = cid;
+  delete from public.biometric_devices where company_id = cid;
+  delete from public.biometric_agent_credentials where company_id = cid;
+  delete from public.biometric_agents where company_id = cid;
+  delete from public.biometric_import_batches where company_id = cid;
+  delete from public.biometric_settings where company_id = cid;
+  end if;
   delete from public.attendance_coords where event_id in (select e.id from public.attendance_events e join public.employees p on p.id = e.employee_id where p.company_id = cid);
   delete from public.attendance_events where employee_id in (select id from public.employees where company_id = cid);
   delete from public.attendance_attempts where employee_id in (select id from public.employees where company_id = cid);

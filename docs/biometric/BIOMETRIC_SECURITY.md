@@ -45,15 +45,16 @@ Status: **assessment of the proposed design (revision 3). Nothing implemented.**
 | Add devices, enable/disable, change punch direction (`manageBiometricDevices`) | ✓ | — | — | — |
 | Test connection / sync now / retry failed syncs (`retryBiometricSync`, later phases) | ✓ | ✓ | — | — |
 | Create/revoke/rotate agent keys | ✓ | — | — | — |
-| Map and end **device-specific** codes (`mapBiometricCodes`) | ✓ | ✓ (own scope) | — | — |
+| Map and end **device-specific** codes (`mapBiometricCodes`) | ✓ | ✓ (own company) | — | — |
 | Map and end **company-wide** codes (`mapBiometricCompanyWide`) | ✓ | — | — | — |
-| Resolve review queue (`reviewBiometric`) | ✓ | ✓ (own scope) | — | — |
+| Resolve review queue (`reviewBiometric`) | ✓ | ✓ (own company) | — | — |
+| Read raw payloads (`biometric_raw_payload`, audited) | ✓ | — | — | — |
 | View raw payload (only through `biometric_raw_payload`, each view audited) | ✓ | — | — | — |
 | See punch source in register | per existing register scope | | | |
-Revised 20 Nov 2026 (B2 review corrections): device configuration and company-wide codes are Admin-only. The B2
+Revised 20 Nov 2026 (B2 review corrections; B3.2 implements this matrix in 0010 — see BIOMETRIC_B3_1_DB_DESIGN.md §3, §11): device configuration and company-wide codes are Admin-only. The B2
 reducer enforces this matrix itself (`assertAllowed`), and B3+ database functions must enforce the same capabilities.
 Raw event content is immutable (trigger); HR decisions are separate insert-only review records; projected rows are
-never deleted (voided at most), and slots corrected by HR are locked against projection.
+never deleted or voided (proposed default: wrong ones are superseded through the correction flow), and slots corrected by HR are locked against projection.
 
 ## 6. Audit
 Device created/changed/disabled, agent created/revoked/rotated, mapping created/disabled, import uploaded/approved,

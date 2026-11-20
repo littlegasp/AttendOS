@@ -1,7 +1,8 @@
 # Biometric B3.1 — database foundation audit and design
 
-Status: **audit and design only.** No migration written, no SQL run against any Supabase project, no application code
-changed. Baseline: branch `feature/biometric-b1`, commit `d8146c9` (B2 approved). Starting point:
+Status: **revision 2 (20 Nov 2026)** — B3.1 owner corrections incorporated (§11) and **B3.2 implemented locally**:
+`supabase/migrations/0010_biometric_core.sql` (§12). No SQL has been run against any Supabase project; no application
+code changed; no extension installed on any hosted project. Baseline: branch `feature/biometric-b1`, commit `d8146c9` (B2 approved). Starting point:
 BIOMETRIC_DATABASE_SCHEMA.md (B1 r2/r3). Every finding below was checked against the migrations 0001–0009, the test
 harness (`supabase/tests`) and the owner scripts (`supabase/deploy`); line references are to those files.
 
@@ -84,7 +85,7 @@ checked read-only before B3.2) · **[change]** departs from the B1 design, with 
 | B1 statement | Reality | Effect on the design |
 |---|---|---|
 | `check_company_refs` on every reference | uuid only | composite foreign keys for biometric↔biometric references (§2.2) |
-| `check_active_refs` reusable | employees-specific | new `biometric_check_active()` guard |
+| `check_active_refs` reusable | employees-specific | new `biometric_mapping_guard()` / `biometric_device_guard()` |
 | HR "own scope" | company-wide only | policies use `is_hr()` + same company |
 | `audit()` on agents | would copy the key hash into the audit log | secrets moved to a separate, unaudited, unreadable table (§2.1) |
 | Voided-row filter is a small change (D7a) | 20 engine filters in ~10 functions | recommendation changed: no voiding column in B3 (§7, Q1) |
@@ -94,7 +95,7 @@ checked read-only before B3.2) · **[change]** departs from the B1 design, with 
 
 ## 2. Proposed schema
 
-### 2.1 Tables (10) — B1's 8 plus two splits
+### 2.1 Tables (11) — B1's 8 plus three [correction: revision 1 said 10; the settings, credentials and state tables make 11]
 All: RLS on, `revoke all … from public, anon, authenticated`, `company_id uuid not null default public.my_company()
 references companies(id)`, `freeze_company_id` trigger, `unique (company_id, id)` (target of composite FKs),
 `created_at`/`updated_at`. "Refs" = `check_company_refs` arguments for references to existing tables.
@@ -244,11 +245,11 @@ Company guard: the existing `company_refs` trigger is re-created with `'device_i
 | settings, agents, devices, sync runs, errors | read | read | — | — |
 | agent credentials | — (functions only) | — | — | — |
 | mappings | read | read | — | — |
-| raw events (normalised columns via a view without `raw_payload`) | read | read | — | — |
-| `raw_payload` | `biometric_raw_payload(id)` only | — | — | — |
+| raw events — approved columns (column grant) and `biometric_raw_events_safe` | read | read | — | — |
+| `raw_payload`, `payload_hash`, `dedupe_key`; errors `payload` | `biometric_raw_payload(id)` / `biometric_error_payload(id)` only | — | — | — |
 | event state, reviews | read | read | — | — |
 Policies: `company_id = my_company() and is_hr()` (Admin ⊂ HR). No INSERT/UPDATE/DELETE grant on any biometric table.
-The security-matrix assertion "attendance … change only through checked functions" is extended to all 10 tables.
+The security-matrix assertion "attendance … change only through checked functions" is extended to all 11 tables (§11.1 for the payload).
 
 ### 3.2 Functions
 | Function | Who | Check inside |
@@ -265,8 +266,9 @@ All `security definer`, pinned `search_path = public`, never take a `company_id`
 `my_company()` or from the agent key), revoked from `public, anon, authenticated` before the explicit grant.
 
 ### 3.3 Agent keys
-- Format `bak_<12-char prefix>_<43-char secret>`; secret = 32 random bytes (pgcrypto `gen_random_bytes`
-  [assumed available as `extensions.gen_random_bytes` on Supabase]); stored as SHA-256 of the whole key. A plain
+- Format `bak_<12-hex prefix>_<43-char secret>`; secret = SHA-256 of two core `gen_random_uuid()` values (244 random
+  bits from the server's strong random source) — **no pgcrypto needed** [change in revision 2]; stored as SHA-256 of
+  the whole key. A plain
   hash is correct for 256-bit random secrets (no password stretching needed; avoids a CPU cost an attacker could
   trigger through the public endpoint).
 - Validation: look up by prefix (unique index), compare hashes, refuse revoked/expired keys, revoked agents, inactive
@@ -320,13 +322,13 @@ automatically. `projection_enabled = false` stores and maps but projects nothing
 ## 6. Migration plan and rollback
 | # | Content | Anon exposure |
 |---|---|---|
-| 0010_biometric_core | extensions `btree_gist`, `pgcrypto` (if absent); 10 tables, composite keys, exclusion constraints, checks, RLS, read policies, immutability/active/company guards, audit triggers; Admin/HR config, mapping and key functions; settings row created for each company | none |
+| 0010_biometric_core | extension `btree_gist`; 11 tables, composite keys, exclusion constraints, checks, RLS, read policies, immutability/active/company guards, audit triggers; Admin/HR config, mapping and key functions; settings row created for each company | none |
 | 0011_biometric_gateway | `biometric_ingest`, `biometric_heartbeat`, dedupe, time validation, mapping resolution; anon EXECUTE on these two only | 2 functions |
 | 0012_biometric_projection | `attendance_events` additions (§2.4), `biometric_work_date_at`, `biometric_project_day`, reconciliation, review re-projection, pg_cron job; decisions Q1/Q3/Q4 applied | — |
 | 0013_biometric_import | import batches upload/approve | — |
 Each migration ships with: a new test suite appended to `run.sh` after it, the security-matrix expectations updated
 in the same commit (anon list becomes `biometric_heartbeat, biometric_ingest, company_brand` in 0011),
-`verify_hosted.sql` checks, `delete_company.sql` (table list 21 → 31 incl. `attendance_events` handling, FK-safe
+`verify_hosted.sql` checks, `delete_company.sql` (table list 21 → 32 incl. `attendance_events` handling, FK-safe
 order: state → reviews → errors → raw → runs → mappings → devices → credentials → agents → batches → settings), docs.
 Rollback: forward-only. Off switches without SQL: revoke keys / disable devices / `projection_enabled = false`.
 0011 can be neutralised by one statement (revoke anon EXECUTE). 0010 before any data: a prepared drop script in
@@ -384,7 +386,7 @@ reverse dependency order (reviewed, not run). After data exists: no drop — ret
 5. `verification_log` shows `biometric` / `imported` for those sources.
 6. **Structural changes from B1:** settings table, credentials table, raw/state split, no mapping `status`, composite
    foreign keys, failed key checks not stored.
-7. **Extensions** on the project: `btree_gist`, `pgcrypto`, `pg_cron` (enabled in 0010/0012; read-only check first).
+7. **Extensions** on the project: `btree_gist` (0010) and `pg_cron` (0012); `pgcrypto` no longer needed (§11.5).
 8. **Security-matrix change:** anon may call `biometric_ingest` and `biometric_heartbeat` in addition to `company_brand`.
 9. **Retention** of raw events: as long as the company's attendance (B1 Q4); payload ≤ 4 KB, never templates or photos.
 10. **Device codes** kept exactly as the device reports them (leading zeros significant).
@@ -408,3 +410,98 @@ Scope **0010_biometric_core only**, local only:
 4. Update `verify_hosted.sql`, `delete_company.sql`, security-matrix expectations, BIOMETRIC_SECURITY.md,
    BIOMETRIC_DATABASE_SCHEMA.md, PROJECT.md; existing 360 checks + 29 regression must still pass.
 5. Stop for review. Gateway (0011) is B3.3, projection (0012) B3.4 after Q1–Q5, imports B3.5.
+
+---
+
+## 11. Revision 2 — owner corrections (B3.1 review, 20 Nov 2026)
+
+### 11.1 Raw payload column security (implemented and tested)
+Access paths, exactly:
+| Path | Admin | HR | Manager / Employee | anon |
+|---|---|---|---|---|
+| `select … from biometric_raw_events` naming approved columns | ✓ own company (RLS) | ✓ own company | 0 rows | refused |
+| `select raw_payload` / `payload_hash` / `dedupe_key`, `select *`, or a `where` on them | **refused** (`permission denied` — column not granted) | refused | refused | refused |
+| `biometric_raw_events_safe` (view, `security_invoker`, `security_barrier`; approved columns only) | ✓ own company | ✓ own company | 0 rows | refused |
+| `biometric_raw_payload(id)` | ✓ own company only; every read written to the audit log | `Not allowed` | `Not allowed` | no EXECUTE |
+| `biometric_event_errors.payload` (second payload of a conflict) | via `biometric_error_payload(id)` | refused | refused | refused |
+Grants: `revoke all` on the table from `public, anon, authenticated`, then `grant select (<22 approved columns>)` to
+`authenticated`. The function is `security definer`, pinned `search_path`, takes only an id, derives the company from
+`my_company()` and requires `is_admin()`. Error `detail` may not contain `raw_payload`/`payload` keys (check).
+Catalog tests prove that no view definition and no other function callable by `authenticated` or `anon` mentions
+`raw_payload`.
+
+### 11.2 Agent ingestion security (specification; 0010 part implemented and tested)
+| Requirement | Design | Where | Proven in 0010 tests |
+|---|---|---|---|
+| Keys never in logs / errors | key only in the POST body of the RPC (never a URL); no function raises with the key; only its SHA-256 and 12-char prefix stored; audit entries carry the prefix only | 0010, 0011 | secret absent from every table and the audit log; checker never raises |
+| Generic failures | `biometric_check_agent_key` returns the same `null` for malformed, unknown, wrong, expired, revoked, revoked-agent and inactive-company keys; the gateway maps every `null` to one message "Not accepted" | 0010 / 0011 | 7 failure kinds → null |
+| Key check before expensive work | gateway order: (1) argument length caps (key ≤ 60 chars, body ≤ 256 KB, ≤ 200 events) — constant time, (2) key check — one indexed lookup + one SHA-256, (3) everything else | 0011 | (0011) |
+| Size limits | batch ≤ 200 events, request ≤ 256 KB; per event payload ≤ 4 KB, no template/photo keys; sync-run response ≤ 64 KB; error detail ≤ 4 KB | 0010 checks + 0011 | payload size and template keys refused |
+| Rate limiting | the database cannot rate-limit unauthenticated callers. Mitigations: per-agent throttle in 0011 (minimum interval between batches, stored on the agent row; heartbeats ≤ 1/min); cheap rejection path; anon statement timeout (≈ 3 s, not raised) bounds each call. **Gateway-level option** if abuse is seen: route agents through a Cloudflare Worker with rate limiting in front of the RPC (owner decision; documented, not built) | 0011 / ops | (0011) |
+| Revoked / expired keys | `revoked_at`, `expires_at`, agent `status`, company `active` all checked | 0010 | tested |
+| Agent-to-device ownership | `biometric_device_for_agent` resolves only the agent's own active devices; raw-event insert guard refuses a device not assigned to the sending agent; composite FK keeps agent, device and run in one company | 0010 | tested (own, other agent, other company) |
+| Batch replay idempotency | `unique (agent_id, batch_id)` on sync runs; gateway returns the stored `response` for a repeat; event-level `unique (company, device, batch, dedupe_key)` | 0010 + 0011 | duplicate batch and duplicate event refused |
+
+### 11.3 Timestamp integrity (implemented and tested)
+Kept separately on every raw event: `device_local_time` (the device's reading as sent, text), `device_timezone`,
+`device_utc_offset` (if the device sends one), `punch_at` (normalised instant), `received_at` (server time, set by the
+insert guard — a supplied value is ignored), `clock_drift_s`, `time_flags`. The insert guard **requires**
+`punch_at` = local time interpreted in the offset (if given) or the zone, so `received_at` can never stand in for the
+punch time. Rules (from the company's settings):
+| Condition | Outcome |
+|---|---|
+| unparseable local time / bad offset / unknown zone | rejected (check) |
+| `punch_at` ≠ local time in its zone/offset | rejected |
+| more than `future_tolerance_s` (120 s) ahead of receipt | rejected |
+| older than `backfill_days` (31) | rejected |
+| ahead of receipt within tolerance | stored, flag `future_within_tolerance` → review |
+| older than `auto_project_max_age_days` (2) | stored, flag `late_backfill` → HR review, never auto-projected (0012) |
+| `abs(clock_drift_s)` > `drift_flag_s` (300) | stored, flag `clock_drift` → review |
+| offset given and differs from the zone's offset | stored, flag `offset_tz_mismatch` → review |
+| zone changes offset within ±3 h (DST) and no offset sent | stored, flag `dst_ambiguous` → review |
+Rejections in 0011 become `biometric_event_errors` rows (`invalid_time` / `future_time` / `too_old`) instead of
+exceptions; the trigger stays as the backstop.
+
+### 11.4 Correction locking — exact wrapper (proposal for 0012) and proof
+SQL: `supabase/tests/concurrency/proposed_correction_lock.sql` — `decide_correction` is renamed to
+`decide_correction_core`; a new `decide_correction` (same signature, `security definer`) reads the correction's
+employee, refuses other companies, takes `pg_advisory_xact_lock(hashtextextended(employee, 7))` — the lock `punch()`
+already takes — and calls the core. The core is revoked from everyone. Lock order on every path: lock 7 first, then
+row locks, so the three paths cannot deadlock. Projection (0012) takes the same lock per employee-day.
+Proof (`supabase/tests/concurrency/lock_proof.sh`, throwaway copies, two real sessions, 2-second held transactions):
+| Scenario | Without wrapper | With wrapper |
+|---|---|---|
+| Correction approval vs projection (same day) | projection did not wait → **2 live check-ins (wrong)** | projection waited ≈1.5 s, saw the corrected check-in, added nothing → 1 |
+| Web punch vs correction approval | punch did not wait | punch waited ≈1.5 s |
+| Web punch vs projection (both lock 7) | serialised → 1 check-in | same |
+| Control: projection without lock 7 | 2 check-ins — so 0012 must take it | — |
+| Existing correction rules with the wrapper | — | own request refused, other company refused, reject needs reason, approval + audit unchanged, decided once, core not callable |
+The wrapper is **not** in 0010 (the attendance engine is unchanged); it ships with 0012 after approval.
+
+### 11.5 Extensions and hosted verification
+`supabase/deploy/check_biometric_prereqs.sql` — read-only (no `create`, no `set`). Reports: PostgreSQL ≥ 15,
+`btree_gist` availability / installed schema, `extensions` schema, `pgcrypto` (informational — no longer needed),
+`pg_cron` availability and preload (0012), the Supabase extension allow-list if visible, the role's CREATE right, API
+role timeouts (read only) and default privileges in `public`.
+Permissions: run as `postgres` in the SQL editor. Installing `btree_gist` needs `postgres` (allowed by Supabase's
+supautils allow-list) or Dashboard → Database → Extensions; `pg_cron` is enabled from the Dashboard (it creates the
+`cron` schema; jobs run as the role that schedules them). **Nothing is installed until you approve running 0010.**
+`verify_hosted.sql` now accepts 21 or 32 tables and has check 13 for 0010.
+
+### 11.6 Operating defaults — PROPOSED, pending explicit owner confirmation
+Implemented as the defaults in `biometric_settings` (Admin-adjustable within limits) and in the design:
+no voiding column · device time trusted only after validation · 120 s future tolerance · 31-day backfill limit ·
+5-minute drift warning · 2-day automatic projection age · older punches to HR review · projection disabled by default ·
+device-specific mapping precedence · leading zeros preserved · raw events retained under the company's attendance
+retention. **These are proposed defaults. They become owner-approved only when you confirm them explicitly.**
+
+## 12. B3.2 — what was built (local only)
+- `supabase/migrations/0010_biometric_core.sql`: extension `btree_gist`; 11 tables; composite foreign keys; four
+  exclusion constraints; checks for codes, times, payload size/content, secrets in connection details; RLS + read
+  policies; column-limited grants; safe view; insert-only/immutable guards (raw events, reviews, mapping history,
+  processing attribution); company/active guards; audit triggers; key generation and check; mapping resolution;
+  12 Admin/HR functions. No anon grant; no change to any existing table, function or policy.
+- Tests: `supabase/tests/biometric_core_test.sql` (153 checks) after `supabase_defaults_stub.sql` (Supabase default
+  grants on); `supabase/tests/concurrency/lock_proof.sh` (15); `supabase/tests/delete_company_test.sh` (4).
+- Owner scripts: `delete_company.sql` (32 tables, works with or without 0010), `verify_hosted.sql` (check 13),
+  `check_biometric_prereqs.sql` (new, read-only). Demo database rebuild includes 0010.

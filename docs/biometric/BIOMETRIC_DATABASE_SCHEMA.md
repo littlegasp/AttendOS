@@ -1,6 +1,7 @@
 # Biometric integration — database schema and migration plan (Phase B1, revision 2)
 
-Status: **design. No SQL written or run.** Every table follows the existing rules: `company_id … default
+Status: **superseded by BIOMETRIC_B3_1_DB_DESIGN.md (revision 2) and migration 0010** — kept as the B1 record.
+Original status: design. No SQL written or run. Every table follows the existing rules: `company_id … default
 public.my_company()` (or reached through `employee_id`), RLS on, `revoke all … from anon`, policies through
 `my_company()` / `is_hr()` / `is_admin()` / `hr_of()`, `check_company_refs` on every foreign key to company data,
 `freeze_company_id`, `audit()` triggers on HR/Admin-changed tables. Writes only through checked functions.

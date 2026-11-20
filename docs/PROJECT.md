@@ -289,5 +289,7 @@ capabilities `manageBiometricDevices`, `mapBiometricCodes`, `mapBiometricCompany
 `retryBiometricSync`; scrollable tab bar on phones. Final verification: mapping changes can no longer silently
 reassign already processed punches (blocked before saving); sign-off script `e2e/biometric_b2_signoff.py`.
 B2 approved. B3.1 (20 Nov 2026): database audit and design only — docs/biometric/BIOMETRIC_B3_1_DB_DESIGN.md;
-no migration written. Awaiting owner review of its questions before B3.2 (migration 0010).
+no migration written. B3.2 (20 Nov 2026): migration 0010_biometric_core written and tested LOCALLY only (11 tables,
+RLS, column-limited raw payload, immutable raw events, effective-dated mappings, agent credentials, Admin/HR functions);
+not run on any hosted project. Future migrations start at 0011. Awaiting owner review before B3.3 (gateway).
 
