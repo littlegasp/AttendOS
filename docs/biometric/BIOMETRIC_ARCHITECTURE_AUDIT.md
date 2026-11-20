@@ -112,5 +112,6 @@ controlled first-in/last-out, no checkout without evidence, provisional outs, fl
 delete-and-recreate to stable slot rows updated in place, with corrected slots locked; duplicate identity ordered
 event ID → record sequence → fingerprint with an occurrence ordinal; time fields and flags spelled out;
 mapping precedence and validity, required references, import references, retention and restore added.
-Final decisions D1–D9 and open questions: BIOMETRIC_SYSTEM_ARCHITECTURE.md §11.
+Decisions D1–D9 (recommended defaults accepted for planning; final owner sign-off pending) and open questions:
+BIOMETRIC_SYSTEM_ARCHITECTURE.md §11.
 

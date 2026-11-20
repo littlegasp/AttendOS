@@ -269,5 +269,10 @@ server, no secret key); Sync Agent on the company LAN; biometric punches become 
 reconciliation. Nothing implemented; awaiting owner decisions D1–D9.
 B1 revision 2 (20 Nov 2026, documents only): .NET 10 LTS agent with isolated legacy SDK host; device direction
 where reliable, else controlled first-in/last-out with no checkout without evidence; stable slot projection updated in
-place, corrected slots locked; dedupe by event ID → record sequence → fingerprint with occurrence; D1–D8 decided,
+place, corrected slots locked; dedupe by event ID → record sequence → fingerprint with occurrence; D1–D8 accepted
+as planning defaults (owner sign-off pending),
 D9 and six detail questions open (docs/biometric/BIOMETRIC_SYSTEM_ARCHITECTURE.md §11).
+B1 revision 3 (20 Nov 2026, documents only): provisional check-outs are display-only raw-punch roles, never attendance
+rows, finalised at day close with no engine change; local push receiver authentication/validation rules; Sync Agent
+queue encrypted with SQLCipher (official edition) and separate DPAPI-protected secrets; decision wording corrected to
+"recommended defaults accepted for planning; final owner sign-off pending".

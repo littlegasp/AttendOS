@@ -1,6 +1,6 @@
 # Biometric integration — test plan (Phase B1)
 
-Status: **plan (revision 2). No tests written yet.** Every result is labelled **[DB]** database test, **[APP]** app/unit test,
+Status: **plan (revision 3). No tests written yet.** Every result is labelled **[DB]** database test, **[APP]** app/unit test,
 **[E2E]** browser, **[MOCK]** mock adapter / agent simulator, **[HW]** real hardware, **[HOSTED]** hosted project.
 Mock results are never reported as hardware results. Existing suites (360 DB, 35 app, 36 + 26 Auth, 29 browser)
 must stay green after every phase.
@@ -42,10 +42,26 @@ outside the 5-minute window; HR correction on a biometric day survives a rebuild
 | Punch dismissed by HR → slot voided (not deleted), day recalculates; with D7a declined → HR correction path instead | DB |
 | Single punch → no inferred check-out, day `incomplete` | DB |
 | Two punches 10 min apart (< minimum session) → no inferred check-out, flagged | DB |
-| Provisional out before day close becomes final after close | DB |
 | Device-direction mode: out without in → flagged, not projected | DB |
 | `attendance_events.at` equals the device punch time, never receipt/processing time, for punches synced 1 h and 3 days late | DB |
 | Every existing DB/app/browser check unchanged (including with the D7a engine condition) | DB, APP, E2E |
+
+## D5. Provisional check-outs (new in revision 3)
+| Test | Kind |
+|---|---|
+| Before day close, latest qualifying punch → raw role `provisional_out`; **no** `attendance_events` `out` row exists | DB |
+| `session_state` stays `working` while a provisional out exists; app check-out still allowed and becomes the counted out (punch → `reconciled`/`extra`) | DB |
+| `day_for` before close: day open, live worked time, status "working", no early-leaving or overtime computed | DB |
+| Register, reports (`report_days`, `report_people`, `report_trend`), dashboard and CSV export before close: provisional punch not counted anywhere | DB, E2E |
+| `day_events` / register drawer / My Attendance show "Provisional Out", visually distinct from counted punches | E2E |
+| Later qualifying punch before close replaces it; earlier punch → `extra`; audit shows the role change | DB |
+| HR correction of the check-out before close → slot locked; provisional punch → `after_correction` | DB |
+| Day-close job after shift end + 2 h → `out` slot row created at the punch's original time; now counted; overtime/early computed | DB |
+| Punch on the next work date closes the previous day early | DB |
+| No qualifying punch at close (single punch / below minimum session) → no `out`, status "missing check-out", flagged `incomplete` | DB |
+| Overnight shift: provisional out across midnight finalised on the correct work date | DB |
+| Day close configured after the engine's 4-h open window → test documents the "missing check-out" interval (configuration guard warns) | DB |
+| Existing open-day behaviour for app users unchanged | DB, E2E |
 
 ## D3. Duplicates (new in revision 2)
 Same event ID twice; same record sequence twice; fallback fingerprint with occurrence 1 and 2 (two genuine identical
@@ -62,6 +78,32 @@ Unauthenticated call; wrong key; revoked key; key of company A + device of compa
 event; oversized batch; rate limit; template/photo fields stripped; HR of A reading B's biometric tables; anon reading
 any biometric table; employee/manager cannot see devices or raw payloads; HR cannot read raw payload; nobody can
 update raw events; build scan finds no secret; anon EXECUTE list = 3 functions.
+
+## E2. Local push receiver (new in revision 3) — MOCK device simulator, then HW
+| Test | Expected |
+|---|---|
+| Receiver started with a public or non-local bind address | Refuses to start |
+| Request from an IP outside the allow-list | Rejected, logged, counted |
+| Correct IP, wrong serial / unknown serial / disabled device | Rejected or quarantined; device flagged "Suspect" after repeats |
+| Known serial from a new IP; new serial from a known IP | Quarantined, punches held, alert |
+| Level-1 device: missing or wrong secret/signature/TLS client cert | Rejected, logged |
+| Body > 256 KB, > 500 records, slow request > 10 s, > 20 req/min | Rejected, logged |
+| Unknown path, method or record type; template/photo upload | 404 / dropped, logged; nothing stored |
+| Valid unauthenticated-LAN device | Accepted only after Admin acceptance; punches `source_auth = unauthenticated_lan` |
+| Receiver never sends management commands | Protocol responses contain no commands (inspected) |
+| Rejections appear in heartbeat and `biometric_event_errors` without payload content | |
+
+## E3. Queue encryption and access (new in revision 3) — agent tests
+| Test | Expected |
+|---|---|
+| Open the queue file with plain SQLite / `strings` | Not readable (no table names, codes or times visible) |
+| Open with SQLCipher and a wrong key | Fails |
+| Read the queue-key blob as another local user / as an admin without the service account | DPAPI decryption fails; file ACL denies |
+| Agent key, device credentials and queue key are three separate blobs | One leaked blob does not reveal the others |
+| `PRAGMA rekey` rotation, then restart | Queue intact, old blob gone |
+| Lost key blob | Agent starts a new queue, re-reads devices over the backfill window, gateway de-duplicates |
+| Uninstall / decommission | Blobs deleted first, then files; queue unrecoverable; key revoked in AttendOS |
+| Logs | Contain no keys, no device credentials, no raw payloads |
 
 ## F. Hardware (B5, B7)
 Per model/firmware: connection test; pull or push of 100+ real punches; times vs. device screen; duplicates on

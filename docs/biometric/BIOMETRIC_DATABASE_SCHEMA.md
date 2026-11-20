@@ -48,13 +48,13 @@ Unique `(agent_id, batch_id)`: a replayed batch returns the stored response and 
 Content (immutable after insert — a trigger refuses updates to these columns):
 `id bigint` · `company_id` · `device_id` (null only for imports) · `agent_id` · `sync_run_id` · `import_batch_id` ·
 `external_event_id` · `record_seq` · `occurrence int` · `employee_device_code` · `device_local_time text` ·
-`device_utc_offset text` · `device_timezone` · `punch_at timestamptz` · `direction` · `direction_source` ·
+`device_utc_offset text` · `device_timezone` · `source_auth` (authenticated | unauthenticated_lan | import) · `punch_at timestamptz` · `direction` · `direction_source` ·
 `verification_method` · `raw_payload jsonb` (attendance record only; size-capped; template/photo keys stripped) ·
 `payload_hash` · `dedupe_key` · `dedupe_basis` (event_id | record_seq | fingerprint) · `received_at` ·
 `clock_drift_s` · `time_flags text[]`.
 Processing (updated only by the projection/review functions, every change audited):
-`employee_id` · `mapping_id` · `work_date` · `processing_status` (stored | unmatched | flagged | projected | extra |
-possible_duplicate | reconciled | after_correction | rejected | dismissed) · `flag_reasons text[]` ·
+`employee_id` · `mapping_id` · `work_date` · `processing_status` (stored | unmatched | flagged | projected |
+provisional_out | extra | possible_duplicate | reconciled | after_correction | rejected | dismissed) · `flag_reasons text[]` ·
 `projected_event_id → attendance_events` · `reconciled_with → attendance_events` · `duplicate_of → biometric_raw_events`
 · `processed_at`.
 Check: exactly one of `device_id` / `import_batch_id` is set.
@@ -74,7 +74,8 @@ inactive_employee | leave_or_day_off | conflict) · `detail` · `attempts` · `l
 `attendance_events`:
 - new nullable columns: `device_id → biometric_devices`, `biometric_event_id → biometric_raw_events` (on delete
   restrict), `import_batch_id → biometric_import_batches`, `projection_slot text`, `direction_basis` (device |
-  inferred_first_last), `provisional boolean default false`, `voided_at`, `void_reason` (D7a);
+  inferred_first_last), `voided_at`, `void_reason` (D7a). There is **no** `provisional` column: provisional
+  check-outs are never attendance rows (architecture §7.1);
 - check `source in ('web','correction','biometric','import')` (all existing rows comply);
 - check (required references):
   `source = 'biometric'` ⇒ `device_id`, `biometric_event_id`, `projection_slot` not null;

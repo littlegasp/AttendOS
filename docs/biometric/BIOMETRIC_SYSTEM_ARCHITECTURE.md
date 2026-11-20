@@ -1,7 +1,9 @@
 # Biometric integration — system architecture (Phase B1, revision 2)
 
-Status: **design for review. Not implemented.** Revision 2 applies the owner's B1 review (20 Nov 2026): runtime,
-direction rules, stable projection, duplicate rules, timestamps, integrity. Final decisions and open questions: §11.
+Status: **design for review. Not implemented.** Revision 2 applied the owner's B1 review (20 Nov 2026): runtime,
+direction rules, stable projection, duplicate rules, timestamps, integrity. Revision 3 (20 Nov 2026) clarifies
+provisional check-outs (§7.1), the local push receiver (BIOMETRIC_SECURITY.md §8) and queue encryption
+(BIOMETRIC_SYNC_AGENT.md §7). Decisions and open questions: §11.
 
 ## 1. Layers
 ```
@@ -94,9 +96,8 @@ Per device, `direction_mode`:
      5 min) of an app event of the compatible direction is `reconciled` with it (§8).
   3. `in` slot: if the day has no live `in` from the app or a correction, the earliest remaining punch fills it.
   4. `out` slot: filled by the latest remaining punch only if it is **at least the minimum session length after the
-     in** (default 30 min) **and** the day is closed (shift end + 2 h has passed, or a punch exists on the next work
-     date). Before the day is closed the latest punch is shown as a **provisional out** (projected with
-     `provisional = true`, labelled in the register) so live dashboards stay useful; it becomes final at day close.
+     in** (default 30 min) **and** the day is closed (§7.1). Before the day is closed that punch is only a
+     **Provisional Out** — a role on the raw punch, **not** an `attendance_events` row (§7.1).
   5. A single punch, or punches too close together to tell in from out, give **no inferred check-out**: the day stays
      "missing check-out" and is flagged `incomplete` for HR.
   6. Remaining punches get role `extra` — kept, shown in the register with time and device, never counted.
@@ -104,7 +105,7 @@ Per device, `direction_mode`:
      do not fit rule 4 are flagged `ambiguous` for HR instead of guessed.
   Projected rows: `direction_basis = 'inferred_first_last'`.
 - Break inference is never done in `first_last`; breaks come from the app or from `device` mode.
-The register labels every punch: **Device: In/Out** (device-confirmed), **Inferred In/Out**, **Provisional out**,
+The register labels every punch: **Device: In/Out** (device-confirmed), **Inferred In/Out**, **Provisional Out**,
 **Extra punch**, **Possible duplicate**, **Matched with app punch**, **Needs review**.
 
 ## 7. Projection — `project_biometric_day(emp, work_date)` (D7)
@@ -127,6 +128,38 @@ This is the only change to existing attendance functions the design needs; it is
 re-creates those functions with one extra condition, and the full existing test suite must pass unchanged. The
 alternative (no voiding; a dismissed punch is fixed only through an HR correction) avoids touching the engine but
 leaves HR more manual work.
+
+### 7.1 Provisional check-outs
+**Why it is not an attendance row.** In the current engine every live `attendance_events` row with `kind = 'out'`
+is final: `session_state` turns the person to `off` (checked out); `day_for_core` stops treating the day as open,
+fixes worked minutes and computes early leaving and overtime; reports, the register and the dashboard all read
+`day_for`. A `provisional = true` column on an `out` row would be ignored by all of them, so it would make a
+provisional check-out count as final. The design therefore keeps provisional check-outs **out of
+`attendance_events` entirely**:
+- A provisional check-out is the role `provisional_out` on a **raw punch** (`biometric_raw_events.processing_status`),
+  recomputed every time the day is projected.
+- It is **displayed** as **"Provisional Out"** in the register drawer and on My Attendance through the new
+  `day_events` function (and the UI built in B6), clearly separate from counted punches.
+- It **does not** change the session state: the person remains checked in (`working`), exactly as an app user who
+  has not yet checked out. The app still allows check-out; an app check-out becomes the counted one and the punch is
+  `reconciled` or `extra`.
+- It **does not** finalise worked hours, overtime, early leaving or status: `day_for_core` keeps treating the day as
+  open (live worked time up to now, status "working"), as it already does for open days.
+- It is **never** read by reports, analytics, exports or any payroll-related total, because they only read
+  `attendance_events` through `day_for`.
+- **Finalisation:** when the day-close condition is met — shift end + 2 h (configurable; must stay below the
+  engine's existing 4-hour open-day window so the day never shows "missing check-out" while a qualifying punch exists),
+  or any punch on the next work date — projection creates the `out` slot row from the best qualifying punch.
+  From then on it is a normal counted check-out. A scheduled job runs the day-close check every few minutes.
+- **Replacement before finalisation:** a later qualifying punch, an app check-out or an HR correction replaces the
+  provisional one; the earlier punch's role changes (`provisional_out` → `extra` / `reconciled` / `after_correction`)
+  and every role change is written to `audit_log` with before/after.
+- **No qualifying punch at day close** (single punch, or punches closer than the minimum session): no check-out is
+  created; the day becomes "missing check-out" under the existing rule and is flagged `incomplete` for HR.
+**Engine changes needed:** none for this behaviour — it relies on the existing open-day handling. New code only:
+`day_events` (display), the day-close job, and the finalisation step inside `project_biometric_day`. The
+existing `my_today` function is left unchanged; My Attendance reads the provisional punch through `day_events`.
+Tests: BIOMETRIC_TEST_PLAN.md §D5.
 
 ## 8. Mixed app and biometric punches (D5)
 Both records are kept. A biometric punch and an app event of the compatible direction within the reconciliation
@@ -153,12 +186,17 @@ No claim of unlimited storage or zero data loss is made until measured per model
 | Device clocks | Drift recorded/flagged, NTP guidance | Wrong clocks need HR correction |
 | Identical genuine punches | Occurrence ordinal in fallback key (schema §3) | Depends on the device returning logs in stable order — verify per model |
 | Anon-callable gateway | Hashed 256-bit keys, revocation, rate/size limits, company from key | Supabase-level rate limiting to be confirmed on hosted |
+| Devices that cannot authenticate pushes | Prefer pull; otherwise isolated device network, strict receiver checks, per-device acceptance, `unauthenticated_lan` label | A spoofer on the device network could inject punches for mapped codes |
+| Encrypted queue library | Supported SQLCipher edition (licence) or documented alternative | Licence cost / vendor dependency |
+| Provisional check-outs | Not stored as attendance rows; finalised at day close | HR must handle days left "missing check-out" |
 | Legacy 32-bit COM SDKs | Isolated adapter host process | Vendor SDK quality outside our control |
 | Hardware claims | Separate mock / hardware-verified labels | Nothing hardware-verified yet |
 | Report performance | No new per-day cost | Daily summary table still required for large companies |
 
-## 11. Final decisions (approved 20 Nov 2026) and open questions
-| # | Decision |
+## 11. Decisions and open questions
+**Status: recommended defaults accepted for architecture planning; final owner sign-off pending.**
+
+| # | Recommended default (planning basis) |
 |---|---|
 | D1 | Baseline: `feature/biometric-b1` from the reviewed `phase-4-5` baseline (`0fcec08`). |
 | D2 | Agent: **.NET 10 LTS** (supported to 14 Nov 2028); legacy/COM SDKs isolated in a separate adapter host process where needed. |
@@ -170,12 +208,20 @@ No claim of unlimited storage or zero data loss is made until measured per model
 | D8 | Backfill window: 31 days default, configurable. |
 | D9 | First physical device: **open** until the owner confirms model and firmware. |
 
+None of D1–D8 is treated as formally approved until the owner signs off.
+
 Open questions for the owner:
 1. **D7a** — approve the voided-row filter in the engine (recommended), or no voiding (HR corrections only)?
-2. Default **minimum session length** for an inferred check-out (proposed 30 min) and **day close** (shift end + 2 h).
-3. Show **provisional check-outs** on live screens (proposed yes, clearly labelled)?
+2. Default **minimum session length** for an inferred check-out (proposed 30 min) and **day close** (shift end + 2 h,
+   below the engine's 4-hour open-day window).
+3. **Provisional check-out behaviour** as specified in §7.1 (display only, never counted until day close)?
+   Show it on live screens (proposed yes, clearly labelled)?
 4. **Raw-event retention** inside a company's data (proposed: as long as the company's attendance is kept; removed only
    by company deletion or an approved purge).
 5. Add a **foreign key on `attendance_events.superseded_by`** → `attendance_corrections(id)` as hardening (data checked
    first)? Proposed yes, in the projection migration.
 6. Which **physical device** for B5 (D9).
+7. **Queue encryption library**: buy the SQLCipher for .NET commercial edition (recommended) — see
+   BIOMETRIC_SYNC_AGENT.md §7.
+8. **Unauthenticated push devices**: allow them at all (with the compensating controls in BIOMETRIC_SECURITY.md §8),
+   or require pull/authenticated push only?
