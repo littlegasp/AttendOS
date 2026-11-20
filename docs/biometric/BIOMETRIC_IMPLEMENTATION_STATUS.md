@@ -1,6 +1,6 @@
 # Biometric integration — implementation status
 
-Branch `feature/biometric-b1` (from `phase-4-5` @ `0fcec08`). Updated 20 Nov 2026 (B1 revision 3; B2 UI; B2 review corrections).
+Branch `feature/biometric-b1` (from `phase-4-5` @ `0fcec08`). Updated 20 Nov 2026 (B1 revision 3; B2 UI; B2 review corrections; B3.1 database audit).
 Labels: **Implemented · Locally tested · Mock tested · Tested with real hardware · Hosted verified · Not yet implemented.**
 
 | Phase | Scope | Status |

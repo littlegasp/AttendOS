@@ -288,5 +288,6 @@ append-only with reasons; device configuration Admin-only; roles enforced in the
 capabilities `manageBiometricDevices`, `mapBiometricCodes`, `mapBiometricCompanyWide`, `reviewBiometric`,
 `retryBiometricSync`; scrollable tab bar on phones. Final verification: mapping changes can no longer silently
 reassign already processed punches (blocked before saving); sign-off script `e2e/biometric_b2_signoff.py`.
-Still no backend. Awaiting owner sign-off before B3.
+B2 approved. B3.1 (20 Nov 2026): database audit and design only — docs/biometric/BIOMETRIC_B3_1_DB_DESIGN.md;
+no migration written. Awaiting owner review of its questions before B3.2 (migration 0010).
 
