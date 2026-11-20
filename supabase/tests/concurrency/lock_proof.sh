@@ -42,7 +42,7 @@ case "$R3" in *"exclusion constraint"*) [ "$N" = 1 ] && ok "direct concurrent in
 
 # ------------------------------------------------------------ 2. HR and Admin decide the same punch at the same moment
 DB=bio_race_review; fresh $DB
-RID=$(q $DB "with d as (select id, company_id, agent_id from biometric_devices where serial_number = 'ZK001' and agent_id is not null limit 1)
+RID=$(q $DB "with d as (select id, company_id, agent_id from biometric_devices where serial_number = 'ZK001' and agent_id = (select id from biometric_agents where agent_identifier = 'office-pc-01'))
   insert into biometric_raw_events (company_id, device_id, agent_id, employee_device_code, device_local_time, device_timezone, punch_at, source_auth, dedupe_key, dedupe_basis)
   select company_id, id, agent_id, '0101', to_char(date_trunc('second', now() - interval '1 minute') at time zone 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS'), 'Asia/Kolkata',
          date_trunc('second', now() - interval '1 minute'), 'authenticated', 'seq:9001', 'record_seq' from d returning id")

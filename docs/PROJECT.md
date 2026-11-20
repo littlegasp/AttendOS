@@ -293,5 +293,8 @@ no migration written. B3.2 (20 Nov 2026): migration 0010_biometric_core written 
 RLS, column-limited raw payload, immutable raw events, effective-dated mappings, agent credentials, Admin/HR functions);
 not run on any hosted project. Revision 3 (SQL review): offsets ≤ ±14:00, error records immutable except retries/resolution,
 review actions = implemented decisions, code-lock protocol for mapping vs processing. Future migrations start at 0011.
-Awaiting owner approval of 0010 before B3.3 (gateway).
+B3.2 approved for local development (20 Nov 2026; not for hosted). B3.3 (20 Nov 2026): migration 0011_biometric_gateway
+written and tested locally — anon biometric_ingest/biometric_heartbeat (key in body, POST only, generic refusals, size
+caps, replay, dedupe, timestamp validation, ownership, throttle, shared code locks); no attendance projection.
+Not run on any hosted project. Future migrations start at 0012. Awaiting owner review before B3.4 (projection).
 

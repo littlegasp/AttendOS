@@ -1,4 +1,4 @@
--- AttendOS: read-only checks to run in the hosted Supabase SQL editor AFTER migrations 0001–0009 (and 0010 when installed).
+-- AttendOS: read-only checks to run in the hosted Supabase SQL editor AFTER migrations 0001–0009 (and 0010/0011 when installed).
 -- Changes nothing. Every row should show ok = true. Safe to run any number of times.
 with
 tables as (
@@ -17,8 +17,10 @@ checks(item, ok, detail) as (
          not exists (select 1 from tables t where has_table_privilege('anon', t.oid, 'select') or has_table_privilege('anon', t.oid, 'insert')
                      or has_table_privilege('anon', t.oid, 'update') or has_table_privilege('anon', t.oid, 'delete')), ''
   union all
-  select '4. Anonymous visitors can call only company_brand',
-         (select coalesce(array_agg(proname::text), '{}') from fns where has_function_privilege('anon', oid, 'execute')) = array['company_brand'],
+  select '4. Anonymous visitors can call only company_brand (and the two device-gateway functions once 0011 is installed)',
+         (select coalesce(array_agg(proname::text order by proname), '{}') from fns where has_function_privilege('anon', oid, 'execute'))
+           = case when to_regprocedure('public.biometric_ingest(text, jsonb)') is null then array['company_brand']
+                  else array['biometric_heartbeat', 'biometric_ingest', 'company_brand'] end,
          (select string_agg(proname, ', ') from fns where has_function_privilege('anon', oid, 'execute'))
   union all
   select '5. No function is callable by PUBLIC by default',

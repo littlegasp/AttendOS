@@ -121,3 +121,11 @@ recovery and crypto-shredding on removal: BIOMETRIC_SYNC_AGENT.md §7.
 Machines stay on the private LAN, no port forwarding. Agent: outbound HTTPS only (443) to the Supabase project
 domain. Direct device-to-cloud push is excluded until decided (D6), because many machines identify themselves only
 by serial number in that mode and some firmware sends plain HTTP — to be verified per model before any use.
+
+
+## B3.3 gateway (0011) — anonymous access
+Only `biometric_ingest` and `biometric_heartbeat` are callable without a login; both refuse everything until a valid
+agent key is presented, accept POST only (a key must never be in a URL), and answer every key problem identically.
+Keys are 256-bit from 0011 (244-bit for keys issued under 0010 until rotated), stored as SHA-256 only. Size caps and
+per-agent throttles apply; invalid-key floods are cheap to refuse and bounded by the anon statement timeout, with a
+Cloudflare Worker rate limiter documented as the gateway-level option. Details and tests: BIOMETRIC_B3_1_DB_DESIGN.md §13.

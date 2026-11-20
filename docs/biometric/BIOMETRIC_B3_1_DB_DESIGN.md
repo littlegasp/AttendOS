@@ -1,6 +1,6 @@
 # Biometric B3.1 — database foundation audit and design
 
-Status: **revision 3 (20 Nov 2026)** — B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
+Status: **revision 4 (20 Nov 2026)** — B3.2 approved for local development; **B3.3 gateway implemented locally (§13)**. Earlier: B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
 `supabase/migrations/0010_biometric_core.sql` (§12). No SQL has been run against any Supabase project; no application
 code changed; no extension installed on any hosted project. Baseline: branch `feature/biometric-b1`, commit `d8146c9` (B2 approved). Starting point:
 BIOMETRIC_DATABASE_SCHEMA.md (B1 r2/r3). Every finding below was checked against the migrations 0001–0009, the test
@@ -266,10 +266,11 @@ All `security definer`, pinned `search_path = public`, never take a `company_id`
 `my_company()` or from the agent key), revoked from `public, anon, authenticated` before the explicit grant.
 
 ### 3.3 Agent keys
-- Format `bak_<12-hex prefix>_<43-char secret>`; secret = SHA-256 of two core `gen_random_uuid()` values (244 random
-  bits from the server's strong random source) — **no pgcrypto needed** [change in revision 2]; stored as SHA-256 of
-  the whole key. A plain
-  hash is correct for 256-bit random secrets (no password stretching needed; avoids a CPU cost an attacker could
+- Format `bak_<12-hex prefix>_<43-char secret>`; secret = SHA-256 of core `gen_random_uuid()` values from the
+  server's strong random source — **no pgcrypto needed** [change in revision 2]. Entropy, stated exactly: 0010 used two
+  UUIDs = **244 random bits**; from 0011 three UUIDs (366 bits) are hashed, so new secrets carry the full **256 bits**
+  (§13.6). Stored as SHA-256 of the whole key. A plain
+  hash is correct for high-entropy random secrets (no password stretching needed; avoids a CPU cost an attacker could
   trigger through the public endpoint).
 - Validation: look up by prefix (unique index), compare hashes, refuse revoked/expired keys, revoked agents, inactive
   companies and disabled devices; one generic error for every failure (no oracle).
@@ -540,3 +541,65 @@ ingestion + mapping + review in parallel: no deadlock, invariant holds.
   grants on); `supabase/tests/concurrency/lock_proof.sh` (21); `supabase/tests/delete_company_test.sh` (4).
 - Owner scripts: `delete_company.sql` (32 tables, works with or without 0010), `verify_hosted.sql` (check 13),
   `check_biometric_prereqs.sql` (new, read-only). Demo database rebuild includes 0010.
+
+## 13. B3.3 — device gateway (migration 0011, local only)
+Status: implemented and tested locally; **not run on any hosted project**. No attendance is written (projection is 0012).
+
+### 13.1 Endpoints (PostgREST RPC, anonymous role, key in the JSON body)
+| Call | Body | Answer |
+|---|---|---|
+| `POST /rest/v1/rpc/biometric_ingest` | `{"p_key": "bak_…", "p_batch": {"batch_id": "<uuid chosen by the agent>", "agent_version": "…", "devices": [{"manufacturer", "serial", "clock_drift_s"}], "events": [ … ]}}` | `{"ok": true, "batch_id", "sync_run_id", "received", "stored", "confirmed_duplicates", "possible_duplicates", "conflicts", "rejected", "outcomes": [{"index", "outcome": stored/duplicate/conflict/rejected, "status" or "reason", "raw_event_id"}]}` |
+| `POST /rest/v1/rpc/biometric_heartbeat` | `{"p_key": "bak_…", "p_status": {"agent_version", "devices": [{"manufacturer", "serial", "reachable", "clock_drift_s"}]}}` | `{"ok": true, "server_time", "devices": [the agent's active devices with their non-secret connection details]}` |
+Event fields: `manufacturer`, `serial`, `employee_code` (exactly as the device shows it), `local_time` (device clock,
+`YYYY-MM-DD HH:MM[:SS]`), optional `utc_offset` (±HH:MM ≤ ±14:00), `direction` (in/out), `verification`, `event_id`,
+`record_seq`, `occurrence` (≥ 1, for identical records), `payload` (attendance record only, ≤ 4 KB, no templates or
+images), `source_auth` (`authenticated` / `unauthenticated_lan`). The device's zone is the one configured on the device.
+Other answers: `{"ok": false, "code": …}` — `not_accepted` (every key problem, identical), `use_post` (GET refused
+before the key is checked — a key must never be in a URL), `too_large`, `bad_request` (batch_id missing),
+`throttled` (+ `retry_after_s`), `processing_failure` (batch rolled back; resend it).
+
+### 13.2 Order of work and limits
+0. POST only → 1. key ≤ 64 chars, request ≤ 256 KB, ≤ 200 events (constant-time, before the key) → 2. key check (one
+indexed lookup + one SHA-256; one answer for malformed, unknown, wrong, expired, revoked-agent and inactive-company
+keys; nothing is written for a refused key) → 3. per-agent lock 43 (one batch at a time per agent) → 4. replay:
+same `batch_id` returns the stored answer with `"replay": true` → 5. throttle: ≤ 30 accepted batches per agent per
+60-second window, exact under concurrency → 6. validate every event without exceptions → 7. shared code locks
+(41, ascending) → 8. store raw + state, resolve each mapping at its own punch time → 9. sync run, device and agent
+telemetry, answer (≤ 64 KB, stored for replay). Heartbeats: ≤ 1 per 30 s, body ≤ 16 KB.
+Measured: a 200-event batch takes ≈ 170 ms locally under a 3-second statement timeout (Supabase's anon default).
+Finding fixed during B3.3: the per-row `valid_timezone()` check on raw events cost ≈ 6 ms a row (1.2 s a batch); it is
+replaced by a stronger, cheap rule — a raw event from a device must carry that device's zone.
+
+### 13.3 Processing state assigned at ingestion
+`unmatched` (no mapping at the punch time) · `flagged` (any time flag, `unauthenticated_source`, or the mapped person
+is switched off — `inactive_employee`; attribution kept) · `possible_duplicate` (same person and device within
+`double_press_s`, with `duplicate_of`) · `stored` (clean). Dedupe identity: event ID → record sequence →
+fingerprint with occurrence. `payload_hash` now hashes the **whole record** (code, local time, offset, direction,
+method, payload), so a re-sent record with any changed field is a *conflict* (original kept; the new payload goes to
+the Admin-only error payload), never a silent duplicate.
+
+### 13.4 Rejections (each leaves an error record with batch, index, device, code and local time — never a payload)
+`unknown_device` (not this agent's, unknown or disabled) · `unsupported_format` (bad code/direction/method/sequence/
+occurrence/source, non-object, template or image keys) · `invalid_time` (not a real time, offset beyond ±14:00) ·
+`future_time` (> 120 s ahead) · `too_old` (> 31 days). Unexpected database failures: the batch is rolled back, one
+`processing_failure` record keeps the SQL state and constraint name only, and the agent gets a plain answer.
+
+### 13.5 Rate limiting
+Per agent (valid key): 30 batches/min and 1 heartbeat/30 s in the database, exact under concurrency. Invalid keys
+cannot be rate-limited in the database without storing attacker input; they are cheap to refuse (size caps first,
+one index lookup, nothing written) and bounded by the anon statement timeout. If abuse is ever seen, the documented
+gateway-level option is a Cloudflare Worker with rate limiting in front of the two RPCs (an owner decision; not built).
+
+### 13.6 Other changes in 0011
+- `biometric_new_key()` now hashes **three** v4 UUIDs (366 random bits) so a new secret carries the full **256 bits**.
+  Keys issued by 0010's version carry **244 bits** until rotated (rotation is available to Admin).
+- Audit triggers on agents and devices fire only when a configuration column changes (heartbeats and sync telemetry no
+  longer flood the audit log); configuration changes are still audited.
+- `verify_hosted.sql` check 4 accepts the two gateway functions once 0011 is installed.
+
+### 13.7 Tests (all executed locally)
+`biometric_gateway_test.sql` 67 checks · `concurrency/gateway_proof.sh` 6 (concurrent replay, overlapping batches,
+batch vs end-mapping, batch vs back-dated mapping, 40 parallel batches → exactly 30 accepted, 5 deadlock rounds) ·
+`e2e/biometric_gateway_http.py` 13 over real HTTP (PostgREST 12.2.3): anon ingest, X-Forwarded-For address, replay,
+generic refusals, size cap, GET refused, heartbeat and throttle, the key absent from the PostgREST log, the Postgres
+server log, audit log, sync-run answers and error records.
