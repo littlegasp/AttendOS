@@ -7,10 +7,11 @@ integrators or resellers say so) · `mock-tested` · `hardware-verified` (model 
 ## ZKTeco
 | Item | Finding | Status |
 |---|---|---|
-| Pull SDK | ZKTeco **Standalone SDK** (Windows DLL `zkemkeeper`, COM; samples in C#/VB), device on the LAN, TCP port **4370** by default. Published by ZKTeco on GitHub (github.com/ZKTeco/Standalone-SDK). Requires registering the DLL on the agent PC (32/64-bit). | documented |
+| Pull SDK | ZKTeco **Standalone SDK** (Windows COM library `zkemkeeper.dll` with companion DLLs; samples in C#/VB), device on the LAN, TCP port **4370** by default. Published by ZKTeco on GitHub (github.com/ZKTeco/Standalone-SDK). The public communication package is **32-bit**; the DLLs must be registered for the bitness of the process using them → runs in the x86 adapter host (BIOMETRIC_ADAPTER_DEVELOPMENT.md §5). Whether it works under .NET 10 COM interop or needs .NET Framework 4.8.1 is **to verify**. | documented |
 | Push | **PUSH SDK / ADMS**: HTTP protocol where the device connects to a configured server (`/iclock/cdata` for handshake and attendance logs, `/iclock/getrequest` for commands). ZKTeco publishes a "General Introduction of PUSH SDK Protocol"; T&A and access-control firmware differ. | documented (protocol document seen via a distributor copy; full spec to be obtained from ZKTeco) |
 | Models | ADMS support listed for many models (e.g. SpeedFace, ProFace X, SenseFace, MB160, F22, iClock series); per model and firmware. | documented (lists vary by source) |
-| Direction | Attendance log carries a state field on many models; whether staff press keys is site-dependent. | to verify |
+| Direction | Attendance log carries a state field on many models; whether staff press keys is site-dependent → `direction_mode` per device. | to verify |
+| Event ID / record sequence | Whether a stable per-record ID or index exists and survives re-reads and reboots. Until shown, the fallback fingerprint is used. | to verify |
 | Log capacity / overwrite | Per model. | to verify on hardware |
 | Unofficial libraries | Reverse-engineered TCP 4370 clients exist (Python, Node.js). **Not used** without an owner decision. | n/a |
 | Agent required | Yes for SDK pull (LAN). For ADMS: agent as local push server (recommended); direct to cloud only after D6. | — |

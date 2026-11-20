@@ -1,6 +1,6 @@
 # Biometric integration — test plan (Phase B1)
 
-Status: **plan. No tests written yet.** Every result is labelled **[DB]** database test, **[APP]** app/unit test,
+Status: **plan (revision 2). No tests written yet.** Every result is labelled **[DB]** database test, **[APP]** app/unit test,
 **[E2E]** browser, **[MOCK]** mock adapter / agent simulator, **[HW]** real hardware, **[HOSTED]** hosted project.
 Mock results are never reported as hardware results. Existing suites (360 DB, 35 app, 36 + 26 Auth, 29 browser)
 must stay green after every phase.
@@ -30,6 +30,32 @@ projected are rebuilt only when HR asks, and that rebuild is audited); employee 
 Regular shift; overnight shift (punch after midnight → previous work date); multiple punches (extras kept, not
 counted); missing check-out; breaks (device-direction mode); late; early; overtime; mixed app + biometric within and
 outside the 5-minute window; HR correction on a biometric day survives a rebuild; leave/holiday punch flagged.
+
+## D2. Projection stability and corrections (new in revision 2)
+| Test | Kind |
+|---|---|
+| Project a day twice → same rows, same ids, no audit entry the second time | DB |
+| Later "last out" arrives → the out slot row is updated in place (same id), audit shows before/after | DB, MOCK |
+| Delayed earlier punch arrives → in slot updated, original punches all kept | DB, MOCK |
+| HR approves a correction of the check-in, then an earlier biometric punch arrives → slot stays superseded, punch = `after_correction` in review, correction result unchanged | DB |
+| Correction approved on a projected out; re-projection after a new mapping → correction intact | DB |
+| Punch dismissed by HR → slot voided (not deleted), day recalculates; with D7a declined → HR correction path instead | DB |
+| Single punch → no inferred check-out, day `incomplete` | DB |
+| Two punches 10 min apart (< minimum session) → no inferred check-out, flagged | DB |
+| Provisional out before day close becomes final after close | DB |
+| Device-direction mode: out without in → flagged, not projected | DB |
+| `attendance_events.at` equals the device punch time, never receipt/processing time, for punches synced 1 h and 3 days late | DB |
+| Every existing DB/app/browser check unchanged (including with the D7a engine condition) | DB, APP, E2E |
+
+## D3. Duplicates (new in revision 2)
+Same event ID twice; same record sequence twice; fallback fingerprint with occurrence 1 and 2 (two genuine identical
+punches both kept, re-read keeps two); same key + different payload → conflict logged, original kept; replayed
+`batch_id` → stored response, nothing processed; agent restart re-sending unconfirmed rows; possible duplicate
+within 60 s → one projected, HR can confirm. Kind: DB, MOCK.
+
+## D4. Mapping precedence and validity
+Device-specific beats company-wide; code reused after an exit maps old punches to the old person and new punches to
+the new person; overlapping validity refused. Kind: DB.
 
 ## E. Security
 Unauthenticated call; wrong key; revoked key; key of company A + device of company B; replayed `batch_id`; duplicate

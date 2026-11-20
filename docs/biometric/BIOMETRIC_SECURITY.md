@@ -1,6 +1,6 @@
 # Biometric integration — security and privacy assessment (Phase B1)
 
-Status: **assessment of the proposed design. Nothing implemented.**
+Status: **assessment of the proposed design (revision 2). Nothing implemented.**
 
 ## 1. Biometric privacy
 - AttendOS stores **no** fingerprint or face templates, raw fingerprint or face images, or enrolment photos. The
@@ -16,13 +16,16 @@ Status: **assessment of the proposed design. Nothing implemented.**
 | HR/Admin browser → AttendOS | Person's Supabase session | RLS + definer functions (unchanged) |
 | Agent → gateway | **Agent key** (256-bit random, base64url) in the request body over HTTPS; PostgREST called with the public publishable key | `biometric_ingest` / `biometric_heartbeat`: hash lookup, status active, company from the agent row |
 | Machine → agent | LAN only; vendor comm key where the model supports one; push listener allow-lists device IPs | Agent |
+| Agent service → adapter host | Local named pipe, ACL limited to the agent's service account; no network listener | Agent |
 | Owner → database | Database password, dashboard MFA | Supabase (unchanged) |
 
 ## 3. Gateway rules (to be tested in B3)
 1. Company is taken **only** from the agent key; any `company_id` in the payload is ignored.
 2. Device must be registered to that company, active, and assigned to that agent (serial + manufacturer match).
 3. Employee mapping only within the same company (`check_company_refs`); mapping to inactive/exited people refused.
-4. Idempotency keys (schema §1) + unique `batch_id` per agent → replayed batches create nothing new.
+4. Idempotency: dedupe key per device (event ID → record sequence → fingerprint with occurrence, schema §3) +
+   unique `batch_id` per agent → replayed batches and agent restarts create nothing new; same key with a different
+   payload is a logged conflict, never an overwrite.
 5. Limits: ≤ 500 events and ≤ 1 MB per call; per-agent rate limit (e.g. 30 calls/min) enforced in the function;
    over the limit → `retry_after`.
 6. Responses contain only per-event outcome codes — never employee names or other data.
@@ -42,9 +45,10 @@ Status: **assessment of the proposed design. Nothing implemented.**
 | Add/edit/disable devices, test/sync now | ✓ | ✓ | — | — |
 | Create/revoke/rotate agent keys | ✓ | — | — | — |
 | Map device codes, resolve review queue | ✓ | ✓ (own scope) | — | — |
-| View raw payload | ✓ | — | — | — |
+| View raw payload (only through `biometric_raw_payload`, each view audited) | ✓ | — | — | — |
 | See punch source in register | per existing register scope | | | |
-Raw payloads are never editable by anyone; resolution creates new records, it does not change the raw event.
+Raw event content is immutable (trigger); HR decisions are separate insert-only review records; projected rows are
+never deleted (voided at most), and slots corrected by HR are locked against projection.
 
 ## 6. Audit
 Device created/changed/disabled, agent created/revoked/rotated, mapping created/disabled, import uploaded/approved,
@@ -56,7 +60,12 @@ Agent key of company A submitting a device serial of company B; mapping a B empl
 devices/events; anon reading any biometric table; replay of a batch; revoked key; oversized batch; template field in
 payload; SQL/JSON injection in codes and times.
 
-## 8. Network
+## 8. Runtime
+The main agent service runs on a supported runtime only (.NET 10 LTS, support to 14 Nov 2028) and takes monthly
+servicing updates. Vendor DLLs run in the isolated adapter host so a vulnerable or unstable vendor component cannot
+reach the queue, the agent key or the network beyond its device.
+
+## 9. Network
 Machines stay on the private LAN, no port forwarding. Agent: outbound HTTPS only (443) to the Supabase project
 domain. Direct device-to-cloud push is excluded until decided (D6), because many machines identify themselves only
 by serial number in that mode and some firmware sends plain HTTP — to be verified per model before any use.

@@ -1,6 +1,6 @@
 # Biometric integration — Phase B1 architecture audit
 
-Status: **audit only.** No migration, function, screen or agent code has been written. Prepared on branch
+Status: **audit only** (revision 2, 20 Nov 2026 — see the note at the end). No migration, function, screen or agent code has been written. Prepared on branch
 `feature/biometric-b1`, created from `phase-4-5` at `0fcec08` (application commit `6d47386` + the final Pilot 01
 pack). Audited on 19 Nov 2026 by reading the repository and the database built from migrations 0001–0009.
 
@@ -66,8 +66,8 @@ pack). Audited on 19 Nov 2026 by reading the repository and the database built f
    request), stores raw events idempotently and returns per-event outcomes. No new server, no secret key.
 2. **Sync Agent on the company LAN** talks to devices (manufacturer SDK pull, or acting as the devices' local push
    server) and uploads to the gateway over HTTPS.
-3. **Projection** `rebuild_biometric_day(emp, work_date)` turns mapped biometric punches into `attendance_events`
-   rows, deterministically, so late or repeated syncs always give the same result.
+3. **Projection** `project_biometric_day(emp, work_date)` keeps one **stable** `attendance_events` row per slot and
+   updates it in place, so late or repeated syncs always give the same result and correction links never break.
 4. **Register drawer** shows each punch with its source.
 
 ## 6. Conflicts and things that must change elsewhere
@@ -76,7 +76,8 @@ pack). Audited on 19 Nov 2026 by reading the repository and the database built f
 | `delete_company.sql`, `verify_hosted.sql` (21 tables), security matrix test | Must include the new tables (counts, deletion order, RLS checks). |
 | verify_hosted check 4 ("anon can execute only `company_brand`") | Becomes `company_brand` + `biometric_ingest` (+ `biometric_heartbeat`). |
 | `punch_core` state machine vs. late-arriving biometric punches | App check-in after an unsynced biometric punch is accepted ("already in" is not detected until sync); handled by the reconciliation rule, not by blocking the app. |
-| `decide_correction` supersedes min-in / max-out | Projection must keep a corrected punch superseded when it rebuilds a day. |
+| `decide_correction` supersedes "the earliest in / latest out" **at approval time**; `superseded_by` holds the correction id **without a foreign key** | A biometric punch synced later with an earlier time would silently override the HR decision. Projection therefore locks corrected slots and sends later punches to review (`after_correction`); FK hardening proposed (open question 5). |
+| Events are filtered by `superseded_by is null` only | Voiding a projected row without deleting it needs one extra condition in the engine functions (D7a). |
 | Leave and day-off checks are in `punch`/`punch_core` | A machine cannot refuse a finger. Biometric punches on leave/holiday days are recorded and flagged for HR (owner decision D4). |
 | `attendance_events.source` has no check constraint | Add one (`web`, `correction`, `biometric`, `import`) — all existing rows already comply. |
 | Static-export app has no server | Any direct device-to-cloud push (ZKTeco/eSSL ADMS) would need Worker code; recommended only through the agent (decision D6). |
@@ -85,7 +86,7 @@ pack). Audited on 19 Nov 2026 by reading the repository and the database built f
 ## 7. Required new migrations (proposal — not written)
 `0010_biometric_core` (devices, agents, mappings, sync runs, raw events, errors, import batches; RLS, audit, company
 guards) → `0011_biometric_ingest` (agent keys, `biometric_ingest`, `biometric_heartbeat`, normalization, idempotency)
-→ `0012_biometric_projection` (`attendance_events` columns + source check, `work_date_at`, `rebuild_biometric_day`,
+→ `0012_biometric_projection` (`attendance_events` columns + source check, `work_date_at`, `project_biometric_day`,
 reconciliation, `day_events`, review-queue functions) → `0013_biometric_import` (CSV/Excel import batches).
 Details: BIOMETRIC_DATABASE_SCHEMA.md.
 
@@ -104,3 +105,12 @@ Full list with mitigations: BIOMETRIC_SYSTEM_ARCHITECTURE.md §9.
 B1 (this) → owner review → B2 device management UI on mock data → B3 gateway → B4 Sync Agent → B5 first real
 adapter on real hardware → B6 attendance projection + register → B7 other manufacturers → B8 readiness review.
 Each phase stops for review. Details: BIOMETRIC_IMPLEMENTATION_STATUS.md.
+
+## 10. Revision 2 (owner review, 20 Nov 2026)
+Runtime changed to .NET 10 LTS (.NET 8 support ended 10 Nov 2026); direction rules refined (device direction first,
+controlled first-in/last-out, no checkout without evidence, provisional outs, flags); projection changed from
+delete-and-recreate to stable slot rows updated in place, with corrected slots locked; duplicate identity ordered
+event ID → record sequence → fingerprint with an occurrence ordinal; time fields and flags spelled out;
+mapping precedence and validity, required references, import references, retention and restore added.
+Final decisions D1–D9 and open questions: BIOMETRIC_SYSTEM_ARCHITECTURE.md §11.
+

@@ -267,3 +267,7 @@ hardware compatibility research, test plan, status). Key proposals: gateway as k
 server, no secret key); Sync Agent on the company LAN; biometric punches become `attendance_events` rows
 (`source = 'biometric'`) so the existing engine is unchanged; first-in/last-out direction rule; 5-minute app/machine
 reconciliation. Nothing implemented; awaiting owner decisions D1–D9.
+B1 revision 2 (20 Nov 2026, documents only): .NET 10 LTS agent with isolated legacy SDK host; device direction
+where reliable, else controlled first-in/last-out with no checkout without evidence; stable slot projection updated in
+place, corrected slots locked; dedupe by event ID → record sequence → fingerprint with occurrence; D1–D8 decided,
+D9 and six detail questions open (docs/biometric/BIOMETRIC_SYSTEM_ARCHITECTURE.md §11).
