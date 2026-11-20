@@ -1,6 +1,6 @@
 # Biometric integration — implementation status
 
-Branch `feature/biometric-b1` (from `phase-4-5` @ `0fcec08`). Updated 20 Nov 2026 (B1 revision 3; B2 UI; B2 review corrections; B3.1 database audit; B3.2 migration 0010 local, approved for local development; B3.3 migration 0011 gateway local, approved for local development; B3.4 projection design written, not implemented).
+Branch `feature/biometric-b1` (from `phase-4-5` @ `0fcec08`). Updated 20 Nov 2026 (B1 revision 3; B2 UI; B2 review corrections; B3.1 database audit; B3.2 migration 0010 local, approved for local development; B3.3 migration 0011 gateway local, approved for local development; B3.4 projection design revision 2, not implemented).
 Labels: **Implemented · Locally tested · Mock tested · Tested with real hardware · Hosted verified · Not yet implemented.**
 
 | Phase | Scope | Status |
@@ -8,7 +8,7 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 | **B1** Architecture & database design | Audit, architecture, schema & migration plan, adapter contract, agent design, security, hardware research, test plan | **Revision 3 written (owner clarifications applied) — awaiting final B1 approval.** No migration, function, UI or agent code. |
 | B2 Device management UI | Overview, devices, add-device wizard, device detail, mapping, sync activity, review queue — on mock data | **Implemented; review corrections and final verification done; locally tested with mock data** (BIOMETRIC_B2_DEVICE_UI.md). No backend, no hardware. Awaiting owner review. |
 | B3 Database + gateway | 0010 core tables, 0011 `biometric_ingest`, heartbeat, keys, normalisation, idempotency, errors | **Implemented and locally tested; approved for local development** (BIOMETRIC_B3_1_DB_DESIGN.md r5.1). Not hosted. |
-| B3.4 Attendance projection (0012) | Projection under the punch lock, slots, provisional out, gate, holds, correction wrapper, `day_events`, labels | **Design written — awaiting review** (BIOMETRIC_B3_4_PROJECTION_DESIGN.md). Not implemented. |
+| B3.4 Attendance projection (0012) | Projection under the punch lock, slots, provisional out, gate, holds, correction wrapper, `day_events`, labels | **Design revision 2 written (owner review applied) — awaiting final approval** (BIOMETRIC_B3_4_PROJECTION_DESIGN.md). Not implemented. |
 | B4 Sync Agent | Service, queue, uploader, heartbeat, mock adapter | Not yet implemented |
 | B5 First real adapter | On the hardware chosen in D9 | Not yet implemented — needs hardware |
 | B6 Register drawer and review processing UI | Screens on top of the 0012 projection | Not yet implemented |

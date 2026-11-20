@@ -1,16 +1,26 @@
-# Biometric B3.4 — attendance projection design (migration 0012)
+# Biometric B3.4 — attendance projection design (migration 0012), revision 2
 
-Status: **design for review only — 20 Nov 2026.** Nothing in this document is implemented. Migration
+Status: **revision 2, design for final approval — 20 Nov 2026** (owner review of revision 1 applied, §0). Nothing in
+this document is implemented. Migration
 `0012_biometric_projection.sql` has **not** been written; no existing attendance function has been altered; no SQL
 was run against any hosted project; no extension installed; no hardware connected; no merge, no deployment.
-Baseline: branch `feature/biometric-b1` @ `94ee495` (0010 and 0011 approved for local development). Every statement
+Baseline: branch `feature/biometric-b1` @ `134d4bb` (revision 1 of this design) (0010 and 0011 approved for local development). Every statement
 about current behaviour below was checked by reading migrations 0001–0011 (line references are to those files).
 
 Owner decisions applied (B3.3 authorisation): no voiding column · device time trusted only after validation ·
 future tolerance 120 s · 31-day backfill · 5-minute drift flag · auto-projection only up to 2 days old · projection
 off by default per company · device codes exact · device mapping beats company mapping · no templates or images ·
 correction lock wrapper in B3.4 · Biometric/Imported display in B3.4 · anonymous access only for the two gateway
-functions.
+functions. Owner decisions Q1–Q10 from the B3.4 review: §14.
+
+## 0. What changed in revision 2 (owner review, 20 Nov 2026)
+| Review item | Change | Where |
+|---|---|---|
+| 1. HR acceptance must not bypass session safety | New status **`correction_needed`**. Session-safety and sequence problems are never projected, whatever HR accepted; the punch reaches the register only through an approved attendance correction (HR may dismiss it). `decided = true` bypasses only the soft flags. Regression tests prove an accepted historical punch cannot block a later web check-in. | §6.2, §6.6, A4, A6, §12.2 |
+| 2. Source-value preflight | First statement of 0012 lists unexpected `source` values and stops the migration without changing anything; the same query becomes a read-only hosted pre-check. | §4, A0, §9 |
+| 3. Provisional duration UI | Live time on a day with a pending biometric check-out is shown as **Provisional**, with the pending check-out time and when it becomes final; never as worked hours or overtime. New read function `biometric_day_pending`. | §11.2, A5 |
+| 4. Device-direction transitions | Rules made explicit (repeats, double press across devices, out of order, mode switch) and a dedicated test list. | §6.5, §12.3 |
+| 5. Owner decisions Q1–Q10 | Applied as given: pg_cron later (separate approval); per-punch HR acceptance; finish started days when disabled; forgotten check-out unchanged; no HR-created corrections; office mode + the device's registered office; provisional minutes separate; shift-gap warning for Admin; **Source column in CSV exports**; imports approved by HR first. | §14, §11.3, A5 |
 
 ---
 
@@ -36,6 +46,13 @@ functions.
   is unlocked, or (b) by the existing HR correction workflow, which supersedes it. After day close, or once a
   correction touches the day, projection never changes that day's counted rows; later punches go to HR review.
 - **Off by default.** `biometric_settings.projection_enabled` stays `false` until an Admin turns it on.
+- **Session safety is absolute.** A punch that would leave someone checked in on a finished day, clash with an open
+  session, or break the in/out sequence is `correction_needed`: HR acceptance cannot push it into the register; only
+  an approved attendance correction can (§6.6).
+- **Provisional is labelled.** While a biometric check-out is pending, screens show the running time as
+  *Provisional* and say when it becomes final; exports mark the day "pending check-out" in the new Source column.
+- **Migration safety.** 0012 first checks the existing `source` values and stops, changing nothing, if any is
+  unexpected.
 
 ---
 
@@ -63,17 +80,17 @@ functions.
 
 | # | Requirement | How | Where |
 |---|---|---|---|
-| 1 | Web check-in/out keeps working unchanged | No change to `punch`, `punch_core`, `session_state`, `work_date_for_checkin`, geofence or GPS code. Projection only inserts rows the engine already understands, under the same lock, and refuses inserts that would open a finished day (§6.6). The existing regression suites must pass unchanged. | §6.6, §12.1 |
+| 1 | Web check-in/out keeps working unchanged | No change to `punch`, `punch_core`, `session_state`, `work_date_for_checkin`, geofence or GPS code. Projection only inserts rows the engine already understands, under the same lock, and never inserts a row that would open a finished day, clash with an open session or break the sequence — not even after HR acceptance (`correction_needed`, §6.6). The existing regression suites must pass unchanged. | §6.6, §12.1–12.2 |
 | 2 | Same employee advisory lock as punch | `biometric_project_day` takes `pg_advisory_xact_lock(hashtextextended(emp::text, 7))` before reading anything. | A4, §8 |
 | 3 | Correction approval uses the approved wrapper | `decide_correction` → `decide_correction_core` (revoked from everyone); new `decide_correction` checks company, takes lock 7, calls the core. Same SQL as `tests/concurrency/proposed_correction_lock.sql`, already proven by `lock_proof.sh`. | A7 |
 | 4 | Stable IDs and correction references | One row per slot, unique `(employee_id, work_date, projection_slot)`; ids never change; projection never deletes, never clears `superseded_by`, never touches `web`/`correction` rows or superseded rows. A guard trigger enforces this. | A1, A2, §6.5 |
 | 5 | Inferred vs explicit direction distinguishable | `direction_basis = 'inferred_first_last'` (slots `in`/`out`) vs `'device'` (slot `dev:<raw id>`); a check ties basis to slot shape. `day_events` labels "Biometric · inferred" / "Biometric · device In/Out". | A1, A5 |
 | 6 | Provisional checkout never finalises | It is the role `provisional_out` on the raw punch, never a row. The day stays open in `day_for_core`, so worked hours, overtime, early leaving and status are not final. Only at day close does projection insert the `out` row. | §6.4 |
-| 7 | Duplicate, unmatched, flagged, unauthenticated events stay out | Only punches passing the gate (§6.2) can fill a slot: attributed, authenticated (or individually accepted by HR), no time or attribution flags, not a possible duplicate, ≤ 2 days old, not in the future. Everything else keeps its review status. | §6.2 |
+| 7 | Duplicate, unmatched, flagged, unauthenticated events stay out | Only punches passing the gate (§6.2) can fill a slot: attributed, authenticated (or individually accepted by HR), no time or attribution flags, not a possible duplicate, ≤ 2 days old, not in the future, from a device with a registered office. Sequence and session problems become `correction_needed`. Everything else keeps its review status. | §6.2, §6.6 |
 | 8 | Older than the auto window → HR review | A not-yet-decided punch older than `auto_project_max_age_days` (2) when first processed becomes `flagged` + `late_backfill`. Enabling projection on a company with a backlog sends the backlog to review, not into the register. | §6.2 |
 | 9 | Disabled by default | Unchanged default `projection_enabled = false`; the queue skips such companies. | §6.1 |
 | 10 | Corrections, shifts, overnight, leave, holidays, weekly offs | Pending correction → `held`; approved correction or superseded slot → day locked, new punches `after_correction`; off day / holiday / full-day leave / before joining / after exit → `held`; overnight work date mirrors the app (§7). | §6.3, §7 |
-| 11 | Displays say Biometric or Imported, never GPS-verified | Check constraint: biometric/import rows have `verified = false`, no distance, no accuracy. `verification_log` outcome `biometric` / `imported`; Timeline and Verification badges show "Biometric device" / "Imported". | A1, A8, §11.3 |
+| 11 | Displays say Biometric or Imported, never GPS-verified | Check constraint: biometric/import rows have `verified = false`, no distance, no accuracy. `verification_log` outcome `biometric` / `imported`; Timeline and Verification badges show "Biometric device" / "Imported"; CSV Source column "Web / Biometric / Imported / Correction". | A1, A8, §11 |
 | 12 | Every projected event traceable | `biometric_event_id` → raw (FK, `on delete restrict`, unique); device id; state back-link `projected_event_id`; guard checks person, company, device, time and work day match the raw punch; every insert/move/role change is in `audit_log` with before/after. | A1, A3, §6.7 |
 
 ---
@@ -87,8 +104,14 @@ and correction rows must have all five null — true for every existing row; bio
 (slot, raw punch); `company_refs` trigger re-created with the two new uuid references; new guard trigger
 `attendance_external_guard` (A2).
 
+**Preflight (first statement):** the distinct existing `attendance_events.source` values are read; anything other
+than `web` or `correction` stops the migration before any change and reports the values and row counts (A0). History is
+never rewritten or deleted to satisfy the new check.
+
 **`biometric_event_state`** — new status `held` with `hold_reason` (resolved automatically when the cause goes away:
-roster, leave, correction decision); `projection_failures` counter; `work_date` frozen once set (state guard).
+roster, leave, correction decision, device office registered); new status `correction_needed` (session-safety and
+sequence problems — only an approved correction or HR dismissal ends it); `projection_failures` counter; `work_date`
+frozen once set (state guard).
 
 **No new table.** Errors use the existing `biometric_event_errors.kind = 'processing_failure'`.
 
@@ -114,7 +137,11 @@ any failure leaves 0011 exactly as it was.
 | `decide_correction` | **changed** (wrapper) | unchanged (HR, manager) | Lock 7 then `decide_correction_core`. |
 | `decide_correction_core` | renamed original | nobody | Body unchanged. |
 | `verification_log` | **changed** (one CASE) | unchanged (HR) | Outcome `biometric` / `imported` for those rows. |
-| `biometric_review_event` | changed (biometric) | unchanged | Resets `processed_at` when a punch becomes `stored`. |
+| `biometric_day_pending(emp, day)` | new, stable | anyone who `can_see(emp)` | Pending biometric check-out: provisional time of the last punch and when the day becomes final (provisional display, §11.2). |
+| `attendance_day_sources(from, to, dept, emp)` | new, stable | same scope as `report_days` (company + `can_see`) | Per person-day: sources of the counted events and pending check-out, for the CSV Source column and register markers. `report_days` unchanged. |
+| `biometric_shift_gap_warnings(days)` | new, stable | Admin | Q8: people whose next shift starts before the previous day closes for projection. Warning only; changes nothing. |
+| `biometric_retry_day(emp, day)` | new | Admin | After a day failed three times and the cause is fixed: reset the counter (audited) and project under lock 7. |
+| `biometric_review_event` | changed (biometric) | unchanged | Resets `processed_at` when a punch becomes `stored`; `correction_needed` can only be dismissed, and points HR to the correction workflow. |
 | `biometric_state_guard` | changed (biometric) | trigger | Freezes `work_date`; `held` needs a reason. |
 
 Unchanged and verified to need no change: `punch`, `punch_core`, `session_state`, `day_for`, `day_for_core`,
@@ -135,36 +162,43 @@ Unchanged and verified to need no change: `punch`, `punch_core`, `session_state`
    and every 15 minutes, `held` punches (so a roster, leave or correction fix is noticed) and recent closed days that
    still have only a check-in (to set the `incomplete` flag).
    For a company whose projection was switched **off**, only days that already have a projected slot are still
-   finalised (so a started day is not left half-done) — owner question Q3.
+   finalised (so a started day is not left half-done); no new employee-day is started — owner decision Q3.
 3. For each: `biometric_project_day` inside its own sub-block; on error the day's punches get
    `projection_failures + 1` and one `processing_failure` error record; after 3 failures the day is skipped until an
-   Admin resolves the error. A lock wait over 5 s (`lock_timeout`) is not a failure — the day is retried next run.
+   Admin fixes the cause and calls `biometric_retry_day`. A lock wait over 5 s (`lock_timeout`) is not a failure — the day is retried next run.
    `COMMIT` after every day.
 
 ### 6.2 The gate — what may count (requirements 7 and 8)
-Evaluated once, when a punch is first processed (`stored` or `held`, not yet decided otherwise):
+Evaluated when a punch is first processed (`stored` or `held`). Three kinds of outcome:
+
+**Soft flags — HR may accept** (`flagged`; `accept_time` / `not_duplicate` sets `decided = true`, then the punch is
+projected like any other, still subject to every rule below):
 
 | Check | Result if it fails |
 |---|---|
-| Punch time not in the future (`punch_at <= now()`) | left `stored`; retried next minute |
-| From a device, not an import batch (imports are 0013) | `held` · `import_not_enabled` |
-| Day locked (approved correction, or a superseded slot) | `after_correction` (HR review) |
-| Day-level hold (§6.3) | `held` · reason |
-| `source_auth = 'authenticated'` | `flagged` · `unauthenticated_source` |
-| No raw time flags and no state flags (drift, DST, offset mismatch, future-within-tolerance, late backfill, inactive, claim rejected…) | `flagged` (reasons kept) |
+| `source_auth = 'authenticated'` | `flagged` · `unauthenticated_source` (Q2: one acceptance per punch, no bulk) |
+| No raw time flags or state flags (clock drift, DST, offset mismatch, future-within-tolerance, source claim rejected…) | `flagged` (reasons kept) |
 | Not older than `auto_project_max_age_days` (2) | `flagged` · `late_backfill` |
-| Work date not ambiguous between an overnight shift and the next shift (§7) | `flagged` · `ambiguous_work_date` |
+| Work date not ambiguous between an overnight shift and the next shift (§7) | `flagged` · `ambiguous_work_date` (acceptance = use the rule's date) |
 
-A punch HR has accepted (`accept_time` / `not_duplicate` → `stored`, `decided = true`) skips the three *soft* checks
-(authentication, flags, age): that acceptance is the HR review the owner asked for. It never skips the future, import,
-lock or day-level checks. `possible_duplicate`, `unmatched`, `flagged`, `rejected` and `dismissed` punches are never
-read as candidates. This also closes finding E11: a punch attached by a later mapping is re-gated here.
+**Holds — released automatically when the cause is fixed** (`held`; not reviewable; never bypassed by acceptance):
+punch time in the future (left `stored`, retried) · import batch (`import_not_enabled`, Q10) · device has no
+registered office (`device_without_office`, Q6) · the day-level holds of §6.3.
+
+**Session safety and sequence — never bypassed** (`correction_needed`, §6.6): would open a finished day · open
+session on another unfinished day · impossible device transition · out of order · after day close · machine punch
+before an app check-in · mixed direction modes · device punch without direction. `decided = true` does **not**
+skip any of these. Approved correction for the day → `after_correction`.
+
+`possible_duplicate`, `unmatched`, `flagged`, `correction_needed`, `rejected` and `dismissed` punches are never read
+as candidates. A punch attached later by a new mapping is re-gated here (finding E11).
 
 ### 6.3 Day-level holds (requirement 10)
 Same rules the app applies, decided again on every run, so fixing the cause releases the punch automatically:
 `employee_inactive` (deactivated, and the day is not before an exit date) · `after_exit` · `before_joining` ·
 `non_working_day` (roster off or holiday — `plan_for`) · `on_leave` (approved full-day leave — `leave_on`;
-half-day leave projects, as the app allows check-in) · `correction_pending`. A released punch that is by then older
+half-day leave projects, as the app allows check-in) · `correction_pending`. Per punch: `device_without_office`
+(Q6 — biometric rows always carry the device's registered office and `work_mode = 'office'`). A released punch that is by then older
 than the auto window becomes `flagged · late_backfill` instead of projecting. Holds never touch rows already
 projected for that day (no voiding); they apply to new punches.
 
@@ -174,43 +208,66 @@ Inputs: gated punches of the day (time order) + the day's live app/correction ev
 2. **Reconcile:** a punch within `reconcile_min` (5 min) of the earliest live app/correction `in` or latest
    `out` is `reconciled` (`reconciled_with` = that event). The app event stays the counted one.
 3. **In slot:** if the day has a live app/correction `in`, there is no biometric `in`; unreconciled punches before it
-   are `flagged · before_app_checkin` (architecture rule 7 — never guessed). Otherwise the earliest remaining punch
+   are `correction_needed · before_app_checkin` (architecture rule 7 — never guessed). Otherwise the earliest remaining punch
    fills slot `in`. If a slot row exists and an earlier punch arrives **before day close**, the row is moved in place
    (`at`, `biometric_event_id`, device, location — same id) and the previous punch becomes `extra`; **after day close**
-   the earlier punch is `flagged · after_day_close` and the row is not moved.
+   the earlier punch is `correction_needed · after_day_close` and the row is not moved.
 4. **Out candidate:** the latest remaining punch at least `min_session_min` (30) after the in, and only if the day has
    no live app/correction `out`. Punches after an app check-out are `extra`.
 5. **Before day close** the candidate is `provisional_out` — **no row**. The person stays checked in (`working`) in
    `session_state`, `day_for` keeps the day open, nothing is final. The app check-out still works and wins (rule 2/4).
+   Screens show the running time as **Provisional · pending biometric check-out** (§11.2), never as worked hours.
 6. **At day close** (`now() >= biometric_day_close_at`, or any live event on a later work date) projection inserts the
    `out` row from the candidate (`biometric_finalise` in the audit log). From then on it is a normal counted check-out.
-   A finalised `out` is never moved; a later punch is `flagged · after_day_close`.
+   A finalised `out` is never moved; a later punch is `correction_needed · after_day_close`.
 7. **No candidate at day close** (single punch, or all within 30 min): no check-out is invented. The day becomes
    "missing check-out" under the existing rule; the `in` punch carries flag `incomplete` for HR.
 8. Everything else is `extra` (kept, shown, never counted). Breaks are never inferred.
 
 ### 6.5 Device-direction mode
-Each gated punch carries the device's `in`/`out`. Reconcile with an app event of the **same** kind within 5 min →
-`reconciled`. Otherwise the punch must be later than every live event of that day (else `flagged · out_of_order`),
-and must be a valid transition given the day's last live event (`in` while checked in, `out` while checked out or on
-an app break → `flagged · impossible_transition`). Valid punches become slot `dev:<raw id>` at once (explicit
-direction — no provisional stage). A day mixing devices of the two modes, or existing slots of the other basis, is
-`flagged · mixed_direction_modes`; a device punch with no direction is `flagged · no_direction`.
+Each gated punch carries the device's `in`/`out`. In time order, per punch:
+1. **No direction** → `correction_needed · no_direction`.
+2. **Double press / two devices:** a biometric row of the same direction within `double_press_s` (60 s), from any
+   device → `extra · double_press`. Identical re-sends never reach here (the gateway stores them once);
+   same-device presses within 60 s are already `possible_duplicate` from ingest and are not candidates.
+3. **Reconcile:** an app/correction event of the same kind within 5 min → `reconciled`.
+4. **Out of order:** not later than every live event of that day → `correction_needed · out_of_order` (a delayed
+   punch is never slotted between counted events).
+5. **Short repeat:** same direction as the day's last counted event within `reconcile_min` → `extra · repeat_in` /
+   `repeat_out` (a person pressing IN twice).
+6. **Impossible transition** → `correction_needed · impossible_transition`: IN while checked in (also on an app
+   break) or while an unfinished session is open on another day; OUT with no earlier IN; OUT after an app check-out;
+   OUT while on an app break.
+7. **Would open a finished day** (IN, day closed, would become the newest event) → `correction_needed`.
+8. Otherwise the punch becomes slot `dev:<raw id>` at once (explicit direction — no provisional stage).
+A day mixing devices of the two modes, or having slots of the other basis (mode switched mid-day) →
+`correction_needed · mixed_direction_modes` for the day's unprojected punches; existing rows stay as counted.
 
-### 6.6 Protecting the app's session state (requirement 1)
-Because `session_state` reads the latest live event across all days (E2), before inserting an **in** row projection
-checks:
-- **Open session on another day.** If the person is still checked in on another work date whose day has not closed
-  (e.g. an overnight shift running into this morning), the punch is `flagged · open_session_other_day`. A stale
-  session on a day that has already closed does not block (the new `in` simply becomes the current session — the app
-  user would otherwise be stuck on "already checked in").
-- **Would open a finished day.** If the day is already closed, no check-out will be created, and the new `in` would
-  become the person's latest live event, it would leave them "checked in" on a past day and block their next app
-  check-in. Such a punch is `flagged · would_open_closed_day` unless HR has accepted it.
-- **Future rows.** Rows are never inserted with `at > now()` (punches within the 120 s tolerance wait).
-An `out` row is inserted only at day close or in device mode as a valid transition, so it cannot reopen anything.
-Known, unchanged behaviour (owner question Q4): a person whose day ends with a counted `in` and no `out` — app or
-biometric — is "checked in" until a correction, exactly as an app user who forgot to check out is today.
+### 6.6 Session safety — never overridden (requirement 1, review item 1)
+`session_state` reads the person's latest live event across all days (E2). A biometric row is therefore only written
+if it cannot change what the app believes about the person's *current* session. The checks, made under lock 7 on
+every run, apply **whether or not HR accepted the punch**:
+
+| Condition | Why it matters | Outcome |
+|---|---|---|
+| **Would open a finished day:** the day is closed, no check-out will be created, and the new `in` would become the person's newest live event | They would be "checked in" on a past day; the next app check-in would say "already checked in" | `correction_needed · would_open_closed_day` |
+| **Open session on another unfinished day** (e.g. an overnight shift still running) | Two sessions at once; the app's check-out would close the wrong one | `correction_needed · open_session_other_day` |
+| Out of order / impossible transition / after day close / before an app check-in / mixed modes (§6.4–6.5) | The counted sequence would no longer be what happened | `correction_needed · <reason>` |
+| Future punch (`at > now()`) | Would become "latest" ahead of real time | waits; projected once in the past |
+
+What happens to a `correction_needed` punch:
+- It is **never projected** — not by the queue, not by `biometric_project_now`, not after `accept_time` (the review
+  function refuses acceptance and tells HR to ask the employee for a correction for that date; Q5 — no HR-created
+  corrections in this phase).
+- It stays visible: `day_events` shows "Needs a correction request"; the review queue lists it with the reason.
+- When a correction for that day is approved, it becomes `after_correction` (informational). HR may also dismiss it
+  with a reason. Either way the raw punch is kept.
+
+A stale session on a day that has already **closed** does not block a new current `in` (the new `in` simply becomes
+the current session — otherwise a biometric user who forgot to punch out would be stuck). Q4: the existing behaviour
+for a person whose day ends with a counted `in` and no `out` (app or biometric) is unchanged.
+
+Regression evidence required (§12.2 group S): an accepted historical punch never blocks a later web check-in.
 
 ### 6.7 Traceability and audit (requirement 12)
 Every insert (`biometric_project`), move (`biometric_slot_moved`), finalisation (`biometric_finalise`) and role change
@@ -233,8 +290,9 @@ shift of `D − 1`:
 `biometric_day_close_at(emp, day)` = the day's shift end (next day for overnight shifts) + `day_close_after_min`;
 with no shift: next local midnight + `day_close_after_min`. Because `day_close_after_min ≤ 239` (0010) and the engine
 keeps an open day live until `shift_end + 4 h`, the out is always written before the day would show
-"missing check-out". Limitation (Q8): if the gap between two of a person's shifts is shorter than
-`day_close_after_min`, the earlier day is closed by the next day's first punch instead.
+"missing check-out". Q8: if the gap between two of a person's shifts is shorter than `day_close_after_min`, the
+earlier day is closed by the next day's first punch instead. Admin is warned (`biometric_shift_gap_warnings`, shown on
+the biometric settings screen and when the day-close period is changed); nothing is changed automatically.
 
 ---
 
@@ -280,88 +338,126 @@ Every path that takes 7 takes exactly one 7 lock per transaction (one employee-d
 ### 8.4 Races, and why each is safe
 | Race (same person) | Outcome |
 |---|---|
-| App check-in vs projection of the same morning | Serialised by 7. If projection commits first, the app sees "already checked in" (the machine check-in is counted, as it would be for a second app tap). If the app commits first, the machine punch reconciles (≤ 5 min) or is `flagged · before_app_checkin`. |
+| App check-in vs projection of the same morning | Serialised by 7. If projection commits first, the app sees "already checked in" (the machine check-in is counted, as it would be for a second app tap). If the app commits first, the machine punch reconciles (≤ 5 min) or is `correction_needed · before_app_checkin`. |
 | App check-out vs provisional out | Serialised by 7. The app check-out is counted; the punch becomes `reconciled` or `extra` at the next run. |
 | Correction approval vs projection | Serialised by 7 (wrapper). Approval first → day locked → punches `after_correction`. Projection first → the correction then supersedes the biometric row as it would an app row. |
 | Correction request vs projection | No lock in `request_correction`. Either order leaves a consistent day: a request made just after a projection simply targets the projected row when approved. |
 | HR review vs projection | Projection waits for the state row; review never needs 7 → no cycle. A newly accepted punch is projected at the next run. |
+| HR acceptance vs a web check-in (session safety) | Acceptance only changes the punch's status; projection then runs under 7 and re-checks session safety against the live events, including a web check-in committed a moment earlier. An accepted punch that would open a finished day is `correction_needed`; the web check-in stands. |
 | Two queue runs overlapping (cron overlap) | Both wait on 7 per day; the second sees no changes (idempotent) and writes nothing. |
 | Mapping attach vs projection | Disjoint rows; attached punches are re-gated at the next run. |
 | Ingest of a new punch during projection | The new punch commits as `stored`; the next run reprojects the day. |
 
 ---
 
-## 9. Failure and rollback scenarios
+## 9. Failure and recovery behaviour
 
-| Scenario | What happens | Recovery |
-|---|---|---|
-| Projection error for one day (bug, constraint) | That day's sub-transaction rolls back completely — no half-written slots. Failure counter + one error record; other days continue. | Admin sees it under Sync Activity errors; after a fix the counter is reset by resolving the error. |
-| Lock wait > 5 s | Day skipped this run. | Next run. |
-| pg_cron stops | Punches stay `stored`; open days are not finalised and turn "missing check-out" at shift end + 4 h. | When it resumes, days are finalised from their qualifying punches (the day was already accepted, so finalisation is not re-gated by age). |
-| Agent offline for days | Late punches arrive flagged `late_backfill` (> 2 days) → HR review; ≤ 2 days project normally (out of order handled, §6.4). | HR accepts or dismisses each. |
-| Migration 0012 fails part-way | One transaction: nothing applied. | Fix and re-run. |
-| Projection behaves wrongly after go-live | Admin switches `projection_enabled` off: no new days are projected. Rows already counted stay (no voiding) and are fixed with corrections. | A later migration can drop the wrapper (rename back) and the new functions; the additive columns can stay. |
-| Correction approved for a day with a projected row | Row superseded as for app rows; later punches `after_correction`; the slot never refills. | — |
-| Device switched from first_last to device mode mid-day | `flagged · mixed_direction_modes` for that day. | HR decides; employee requests a correction if needed. |
-| Clock jump on the device | Drift > 5 min is flagged at ingest; never auto-projected. | HR review. |
-| Company deleted | Owner script deletes state → coords → attendance events → raw events (reordered, A9). | — |
-
----
+| # | Scenario | Detected by | Effect on the register | Automatic recovery | Manual recovery |
+|---|---|---|---|---|---|
+| F1 | Unexpected `attendance_events.source` value at migration | Preflight A0 | None — migration stops before any change | — | Owner reviews the reported values; history is not edited to pass. Fix the cause, then a new decision. |
+| F2 | 0012 fails part-way for any other reason | PostgreSQL error | None — one transaction | — | Fix, re-run. |
+| F3 | One employee-day errors during projection | Sub-block in the queue | That day unchanged (full rollback of the day, no half slots) | Retried next minute, up to 3 times | Admin sees the `processing_failure` record, fixes the cause, calls `biometric_retry_day` (audited). |
+| F4 | Lock wait > 5 s (busy person) | `lock_timeout` | None | Retried next run; not counted as a failure | — |
+| F5 | pg_cron not installed / stopped (Q1) | Punches stay `stored`; settings screen shows "last projection run" | New punches not counted; open days turn "missing check-out" at shift end + 4 h | When cron runs again, days are finalised from their qualifying punches (the day was already accepted, so finalisation is not age-gated) | Until hosted pg_cron is approved, keep projection **off** on hosted. HR "process now" covers single days but not day close. |
+| F6 | Agent offline for days | `late_backfill` flags | Late days show absent until reviewed | ≤ 2 days old: projected normally (out-of-order handled) | HR accepts or dismisses each punch (Q2: per punch). |
+| F7 | Session-safety or sequence problem | Projection (§6.6) | Punch not counted | — | Employee requests an attendance correction; HR approves (punch becomes `after_correction`) or dismisses it. HR acceptance cannot force it in. |
+| F8 | Held punch (off day, leave, pending correction, no device office, import) | Projection | Not counted; person shows absent / on leave / off | Released within 15 min of the cause being fixed (roster, leave, correction decided, office registered) | HR fixes the cause; a release older than 2 days goes to review. |
+| F9 | Projection behaves wrongly after go-live | Owner / HR | Wrong rows possible | — | Admin turns `projection_enabled` off: no new days start; started days finish (Q3). Counted rows are fixed through corrections (no voiding). A later migration can remove the functions and the wrapper; the additive columns stay. |
+| F10 | Correction approved for a day with projected rows | Wrapper + lock 7 | Correction row counts; biometric row superseded | Later punches of the day `after_correction`; slot never refilled | — |
+| F11 | Device switched between first_last and device mode mid-day | Projection | Rows already counted stay | New punches of that day `correction_needed · mixed_direction_modes` | Correction if the day is wrong. |
+| F12 | Device clock wrong | Drift flag at ingest | Not auto-counted | — | HR accepts (if the time is right) or dismisses. Rows already counted from a wrong clock are fixed with corrections. |
+| F13 | Wrong employee mapping discovered after projection | Admin | Rows on the wrong person stay (attribution frozen) | — | Mapping fixed for the future; the affected person requests corrections; HR-created corrections are a later phase (Q5). |
+| F14 | Two queue runs overlap | Lock 7 per day | None | Second run writes nothing (idempotent) | — |
+| F15 | Database restored from backup | — | Rows as of the backup | Queue re-processes punches not yet marked processed; idempotent | Agent re-sends from its queue; the gateway de-duplicates. |
+| F16 | UI deployed before/after 0012 | — | Unknown `source` values | UI shows unknown sources as "Other" rather than failing | Deploy UI and 0012 together. |
+| F17 | Company deleted | Owner script | — | — | Script reordered: state → coords → attendance events → raw events and other biometric tables (A9). |
+| F18 | Shift gap shorter than day-close period | `biometric_shift_gap_warnings` | Earlier day closes at the next day's first punch | — | Admin adjusts the setting or rosters if wanted (never automatic, Q8). |
 
 ## 10. Security and permission matrix
 
 | Call / data | anon | Employee | Manager | HR | Admin | System (pg_cron / owner) |
 |---|---|---|---|---|---|---|
-| `biometric_ingest`, `biometric_heartbeat` | with agent key only (unchanged) | — | — | — | — | — |
+| `biometric_ingest`, `biometric_heartbeat` | agent key only (unchanged) | — | — | — | — | — |
 | `punch` (web) | — | own | own | own | own | — |
-| `biometric_project_day`, `biometric_run_projection`, helpers, `biometric_work_date_at`, `biometric_day_close_at` | **no** | **no** | **no** | **no** | **no** | yes (revoked from public, anon, authenticated) |
-| `biometric_project_now` | no | no | no | own company, people in HR scope (`hr_of`) | yes | — |
-| `day_events` | no | own days | team (`can_see`) | company scope | company | — |
-| Raw payloads | no | no | no | no | via `biometric_raw_payload` (audited, unchanged) | — |
-| `decide_correction` (wrapper) | no | no (own excluded, unchanged) | team, unchanged | scope, unchanged | yes | — |
-| `decide_correction_core` | no | no | no | no | no | no (definer call only) |
+| `biometric_project_day`, `biometric_run_projection`, `biometric_set_role`, `biometric_write_slot`, `biometric_work_date_at`, `biometric_day_close_at` | no | no | no | no | no | yes (revoked from public, anon, authenticated) |
+| `biometric_project_now` | no | no | no | people in HR scope (`hr_of`) | yes | — |
+| `biometric_retry_day` | no | no | no | no | own company | — |
+| `biometric_review_event` (accept / dismiss…) | no | no | no | own company (unchanged) | yes | — |
+| Accept a `correction_needed` punch | no | no | no | **refused** | **refused** | — |
+| `day_events`, `biometric_day_pending` | no | own days | team (`can_see`) | scope | company | — |
+| `attendance_day_sources` (Source column) | no | own rows (same scope as `report_days`) | team | scope | company | — |
+| CSV export buttons (UI) | — | — | as today (`exportReports`) | as today | as today | — |
+| `biometric_shift_gap_warnings` | no | no | no | no | yes | — |
+| Raw payloads | no | no | no | no | `biometric_raw_payload` (audited, unchanged) | — |
+| `decide_correction` (wrapper) | no | not own (unchanged) | team (unchanged) | scope (unchanged) | yes | — |
+| `decide_correction_core` | no | no | no | no | no | definer call only |
 | `verification_log` | no | no | no | yes (unchanged) | yes | — |
-| Turn projection on/off (`biometric_save_settings`) | no | no | no | no | yes (unchanged, Admin only) | — |
-| Read `attendance_events` incl. new columns | no | own (RLS `can_see`, unchanged) | team | scope | company | — |
-| Insert / update `attendance_events` directly | no | no (no grant, unchanged) | no | no | no | only through definer functions; biometric rows only while `attendos.projection = on` (guard) |
+| Turn projection on/off | no | no | no | no | yes (unchanged, Admin only) | — |
+| Read `attendance_events` incl. new columns | no | own (RLS unchanged) | team | scope | company | — |
+| Write `attendance_events` | no | no grant (unchanged) | no | no | no | only definer functions; biometric rows only while `attendos.projection = on` (guard) |
+| Install pg_cron, schedule the job | — | — | — | — | — | **not in 0012**; separate owner approval (Q1) |
 
-Other security properties: every new function is `SECURITY DEFINER` with `search_path = public`; no new anonymous
-entry point; no service-role key anywhere; cross-company references refused by `company_refs` (device, batch) and the
-guard (raw punch); employees see role labels but not flag details, device addresses or payloads. The guard's
-`attendos.projection` setting is defence in depth only — no client role can write the table at all.
-
----
+Every new function is `SECURITY DEFINER` with `search_path = public`, except the queue procedure, which is
+`SECURITY INVOKER` because PostgreSQL forbids `COMMIT` in a definer procedure; it is revoked from every client role and
+runs only as the job owner. No new anonymous entry point; no service-role key; cross-company references refused by
+`company_refs` (device, batch) and the guard (raw punch). Employees see role labels but not flag details, device
+addresses or payloads. The `attendos.projection` setting is defence in depth — no client role can write the table.
 
 ## 11. Reports, exports and displays
 
-### 11.1 Register, reports, analytics, CSV export
-No function or column changes. `report_days` → `day_for` counts biometric rows like app rows: first in, last out,
-worked, late, early, overtime and status come from them once they exist. Effects owners should expect:
-- **Today, before day close:** a biometric-only person shows *working* with live minutes running until day close
-  (provisional out not counted) — up to `day_close_after_min` (2 h) more than they actually stayed, until the out is
-  written. Final figures are correct after close. (Q7)
-- **Held / flagged punches** are not in reports: the person shows *absent* (or *on leave* / *off*) until HR resolves
-  the review item. The review queue count is the signal.
-- **Missing check-out** days from single punches show as today ("missing checkout") with the `incomplete` flag.
-- **Corrections** behave exactly as now; `pending_correction` is unchanged.
-- **Exports** keep their columns; they never include provisional, extra or raw punches. A "Source" column is not added
-  in 0012 (owner question Q9).
-- **Performance:** `day_for` does the same loop; two partial indexes add nothing to app rows. The scheduled job runs
-  one small transaction per employee-day.
+### 11.1 Calculations
+No calculation changes. `report_days` → `day_for` counts biometric rows like app rows. Overtime and early leaving are
+computed by the engine **only for closed days** (E3), so a pending biometric check-out can never produce overtime or
+early leaving. Held, flagged and `correction_needed` punches are not counted: the person shows absent / on leave /
+off until resolved. Corrections and `pending_correction` behave exactly as now.
 
-### 11.2 Verification history
-`verification_log` outcome: `biometric` (source biometric) or `imported` (source import); app rows unchanged
-(`verified`, `not_required`, `corrected`, `refused`). The location column shows the device's office.
+### 11.2 Provisional duration (review item 3, Q7)
+A day is **pending** when it has a `provisional_out` punch (`biometric_day_pending`). Three things are shown apart:
 
-### 11.3 UI (same commit as 0012, small)
+| Shown as | When | Source |
+|---|---|---|
+| **Provisional time** — e.g. "Provisional 8 h 21 m · pending biometric check-out (last punch 18:02) · final at 20:00" | Day open with a pending biometric check-out | `day_for` live minutes + `biometric_day_pending` |
+| **Worked (final)** — hours, late, early leaving, overtime | Day closed (biometric out written, app check-out, or correction) | `day_for` |
+| **Pending biometric check-out** chip, with a one-line reason: "Your last punch becomes your check-out when the day closes at 20:00, unless you punch again or check out in the app." | Same as provisional | `biometric_day_pending` |
+
+Rules: provisional minutes are never labelled "Worked", never summed into a total as final, and the overtime/early
+badges are hidden while pending. My Attendance (Today card), the register row and drawer, and the person's history
+use this. Report screens whose range includes a pending day show a note: "N days still open — their time is
+provisional until the day closes." App-only open days keep today's display (no change).
+
+### 11.3 CSV exports — Source column (Q9)
+Per-day exports gain one column, **Source**, placed after Check-out; every existing column and calculation is kept:
+Register CSV (`Register.tsx` `csvCols`) and the Late / Overtime detail CSVs (`ReportScreens.tsx`). Values from
+`attendance_day_sources` (sources of the counted in/out events of that day):
+
+| Counted events of the day | Source cell |
+|---|---|
+| app only | Web |
+| biometric only | Biometric |
+| import only | Imported |
+| correction only | Correction |
+| several | joined in this order with " + ", e.g. "Biometric + Correction" |
+| no counted events | empty |
+| pending biometric check-out | the above + " (pending check-out)" — the day's hours are provisional |
+
+Aggregate exports (people summary, departments, daily trend, leave) have no per-day source and are unchanged.
+Exports never contain raw, provisional, extra or duplicate punches. The CSV formula-safety in `src/lib/csv.ts` applies
+to the new column too.
+
+### 11.4 Other displays
+- `verification_log` outcome `biometric` / `imported` (location column = the device's office); app rows unchanged.
 - `src/lib/attendance.ts`: `source?: "web" | "correction" | "biometric" | "import"`.
-- Timeline (`AttendanceCard.tsx:221`): source first — "· biometric device" / "· imported" — before the
-  `verified` text, so a biometric row can never read "location verified" or "no location".
-- Verification badges (`LocationsPanel.tsx`): "Biometric" and "Imported" tones.
-- My Attendance and the register drawer read `day_events` for provisional/extra punches ("Provisional Out — becomes
-  your check-out at day close").
+- Timeline (`AttendanceCard.tsx:221`): source first — "· biometric device" / "· imported" — so a biometric row never
+  reads "location verified" or "no location".
+- Verification badges (`LocationsPanel.tsx`): "Biometric" and "Imported"; an unknown source shows as "Other" (never as verified).
+- Review queue: `correction_needed` items say "Ask the employee to request a correction for <date>"; no Accept button.
+- Biometric settings: shift-gap warnings (Admin), "projection last ran at …".
+- `day_events` labels: Provisional Out · Extra punch · Possible duplicate · Matched with app punch · After correction ·
+  Waiting for HR · Needs review · Needs a correction request · Duplicate · Dismissed.
 
----
+### 11.5 Performance
+`day_for` does the same work; the two partial indexes do not cover app rows. `attendance_day_sources` reads events by
+`(employee_id, work_date)` (existing index). The job runs one small transaction per employee-day.
 
 ## 12. Test plan (to run when 0012 is implemented)
 
@@ -371,44 +467,95 @@ Full database suite (633 today), `lock_proof.sh` (21), `gateway_proof.sh` (6), g
 verification, leave/report and security-matrix tests are **not edited**.
 
 ### 12.2 New `biometric_projection_test.sql` (database)
-1. Projection off by default: nothing projected; enabling projects; disabling stops new days.
-2. Single in → slot `in`, `direction_basis = inferred_first_last`, `verified = false`, device and raw linked.
-3. In + out ≥ 30 min, before close → out is `provisional_out`, **no row**; `day_for` open (`working`), early 0, overtime 0.
-4. At close → `out` row; `day_for` final hours/early/overtime equal an app day with the same times.
-5. In + out < 30 min → no out; at close `missing_checkout` + `incomplete`.
-6. Earlier punch arriving before close → same row id, `at` moved, audit before/after; after close → `after_day_close`.
-7. Double press (60 s, across devices) → `extra`; possible duplicate never projected.
-8. App in at 09:00, machine 09:03 → `reconciled`; machine 08:30 → `before_app_checkin`; app out then machine → `extra`.
-9. Unauthenticated LAN punch → flagged; after HR `accept_time` → projected.
-10. Late backfill (> 2 days) → flagged; ≤ 2 days → projected; future within 120 s → waits, then projects.
-11. Holiday, weekly off, full-day leave → `held`; roster/leave fixed → released and projected; half-day leave projects.
-12. Before joining / after exit / deactivated → `held`.
-13. Pending correction → `held`; approved correction → day locked, slot superseded and never refilled, new punches `after_correction`.
-14. Overnight shift 22:00–06:00: in 21:55 and out 06:20 on the same work date; ambiguous overlap → flagged.
-15. Device mode: valid in/out → `dev:<id>` rows immediately; out without in, in while in, out of order → flagged; mixed modes → flagged.
-16. Session protection: lone in on a closed day that would become the latest event → `would_open_closed_day`; open overnight session → `open_session_other_day`; after projection `punch('in')` behaves exactly as for an app user.
-17. Idempotence: second run → no row change, no audit row, no version change.
-18. Guard: direct insert of a biometric row without projection refused; changing person/day/slot/kind refused; moving a superseded slot refused; clearing `superseded_by` refused; raw/person/time mismatch refused; web row with biometric columns refused.
-19. Constraints: source check, shape check, slot uniqueness, one row per raw punch.
-20. Mapping attach of an old unmatched punch → re-gated (late_backfill / unauthenticated), not projected silently (finding E11).
-21. Permissions: every system function refused to anon/authenticated; `biometric_project_now` HR-scope only, other company refused; `day_events` per `can_see`; no payload in `day_events`.
-22. `verification_log` outcome `biometric`; never `verified`.
-23. Company deletion with projected rows (reordered script) leaves other companies untouched.
+**P — preflight and schema**
+
+1. Preflight passes on `web`/`correction`; a throwaway copy with a row `source = 'kiosk'` stops 0012 with the value and
+   count in the message, and the database is byte-for-byte unchanged (no new column, no constraint, the row intact).
+2. Source check, shape check, slot uniqueness, one row per raw punch; web row with biometric columns refused.
+3. Guard: direct biometric insert without projection refused; person/day/slot/kind change refused; moving a superseded
+   slot refused; clearing `superseded_by` refused; raw/person/time/work-day mismatch refused.
+
+**F — first-in / last-out**
+
+4. Off by default; enabling projects; disabling: no new day starts, a started day is still finalised (Q3).
+5. Single in → slot `in`, `inferred_first_last`, `verified = false`, `work_mode = 'office'`, `location_id` = device office.
+6. In + out ≥ 30 min before close → `provisional_out`, **no row**; `day_for` open, early 0, overtime 0;
+   `biometric_day_pending` = pending with the punch time and final time.
+7. At close → `out` row; final hours, early leaving and overtime equal an app day with the same times; pending = false.
+8. In + out < 30 min → no out; at close `missing_checkout` + `incomplete`.
+9. Earlier punch before close → same row id moved, audited; after close → `correction_needed · after_day_close`.
+10. Double press across devices → `extra`; possible duplicate never projected.
+11. App in 09:00 + machine 09:03 → `reconciled`; machine 08:30 → `correction_needed · before_app_checkin`; app out then machine → `extra`.
+
+**G — gate, holds, decisions**
+
+12. Unauthenticated punch → flagged; one HR acceptance per punch → projected (no bulk path exists, Q2).
+13. Late backfill (> 2 days) → flagged; ≤ 2 days → projected; future within 120 s waits then projects.
+14. Holiday, weekly off, full-day leave, before joining, after exit, deactivated, device without office, import batch → `held`;
+    fixing the cause releases it within the 15-minute recheck; half-day leave projects.
+15. Pending correction → `held`; approved correction → day locked, slot superseded and never refilled, new punches and
+    `correction_needed` punches → `after_correction`.
+16. Overnight 22:00–06:00: in 21:55 and out 06:20 on one work date; overlap with the next shift → `ambiguous_work_date`.
+17. Mapping attaches an old/unauthenticated unmatched punch → re-gated, not projected silently (E11).
+18. Idempotence: second run → no row change, no audit row, no version change.
+
+**S — session safety (review item 1), each followed by a real `punch('in')` from the web path**
+
+19. HR-accepted unauthenticated lone in from 3 days ago (day closed, no out) → `correction_needed · would_open_closed_day`;
+    `session_state` stays `off`; the employee's web check-in today succeeds.
+20. Same with a late-backfill flag and with a clock-drift flag accepted by HR → same result.
+21. `accept_time` on a `correction_needed` punch is refused with the correction message; `dismiss` works; after an
+    approved correction for that date it becomes `after_correction`; web check-in unaffected throughout.
+22. Accepted historical in **with** a qualifying out → both rows projected, session `off`, web check-in succeeds.
+23. Open overnight session + new in for the next day → `correction_needed · open_session_other_day`; the app check-out
+    closes the overnight session as today.
+24. Stale session on an already-closed day + new biometric in today → projected; the person is checked in today (not stuck).
+25. `biometric_project_now` and `biometric_retry_day` obey the same rules (no bypass through the HR or Admin path).
+
+**D — device-direction transitions (review item 4); nothing invalid may reach the register**
+
+26. Repeated IN: second IN within 60 s → `extra · double_press`; between 60 s and 5 min → `extra · repeat_in`; after 5 min → `correction_needed · impossible_transition`.
+27. OUT with no earlier IN that day → `correction_needed · impossible_transition`.
+28. IN while already checked in (by device and by the app) → `correction_needed`.
+29. OUT after an app check-out → `correction_needed`; OUT while on an app break → `correction_needed`.
+30. Mode switched mid-day (first_last → device and back) → existing rows stay, new punches `correction_needed · mixed_direction_modes`.
+31. Two device-mode devices, same person: IN on both within 60 s → one row + `extra · double_press`; IN on A, OUT on B → valid pair.
+32. Duplicate events: identical re-send → one raw row (gateway); same device within 60 s → `possible_duplicate`, never projected.
+33. Delayed and out-of-order: an OUT arriving after a later IN was counted → `correction_needed · out_of_order`;
+    in-order late arrivals ≤ 2 days → projected.
+34. Device punch with no direction → `correction_needed · no_direction`.
+35. After every case in 26–34: invariant query — the day's live rows alternate in/out validly, every biometric row
+    matches its raw punch, no slot twice.
+
+**U — reads, exports, permissions**
+
+36. `attendance_day_sources`: Web / Biometric / Imported / Correction / combined / pending; scope equals `report_days`
+    (other company, other team refused or empty); 93-day limit.
+37. `biometric_day_pending` per `can_see`; `day_events` never returns payloads or flag details to employees.
+38. Every system function refused to anon and authenticated; `biometric_project_now` HR scope only;
+    `biometric_retry_day` and `biometric_shift_gap_warnings` Admin only; nothing changed by the warnings function.
+39. `verification_log` outcome `biometric`; never `verified`.
+40. Company deletion with projected rows (reordered script) leaves other companies untouched.
 
 ### 12.3 Concurrency proofs (`concurrency/projection_proof.sh`, two real sessions each)
-1. Web check-in and projection of the same person started together, 50 rounds: exactly one counted in, state consistent, no deadlock.
-2. Correction approval vs projection (both orders, with `pg_sleep` inside to force overlap): approval-first locks the day; projection-first row is superseded; never both an extra slot and a correction row for the same in.
+1. Web check-in vs projection of the same person, 50 rounds: one counted in, consistent state, no deadlock.
+2. Correction approval vs projection (both orders, forced overlap): never an extra slot beside the correction row.
 3. Web check-out vs day-close finalisation: never two counted outs.
-4. Two `biometric_run_projection` calls at once: identical result, audit count = single run.
-5. HR review vs projection of the same punch; mapping change vs projection; ingest vs projection.
-6. Mixed load (ingest + review + mapping + punch + correction + projection, 5 rounds): no deadlock, invariants hold
-   (every biometric row matches its raw punch; no slot duplicated; no superseded row changed).
+4. Two queue runs at once: identical result; audit count equals one run.
+5. HR acceptance vs projection; mapping change vs projection; ingest vs projection.
+6. Accepted historical punch projected concurrently with a web check-in (S19 under load): the web check-in always succeeds.
+7. Mixed load, 5 rounds: no deadlock; invariants hold.
 
-### 12.4 End-to-end (local PostgREST)
-Gateway ingest → `CALL biometric_run_projection()` → `my_today` and `day_events` over HTTP show the biometric check-in;
-the app screen shows "biometric device" and never "location verified"; register and CSV show the same totals as the
-database. pg_cron itself is not available on the local PostgreSQL (checked: only `btree_gist`, `pgcrypto`), so locally
-the procedure is called directly; the schedule is verified only on hosted after approval.
+### 12.4 Browser and end-to-end (local PostgREST)
+Gateway ingest → `CALL biometric_run_projection()` → over HTTP and in the browser:
+- Today card shows **Provisional** time, the pending chip and the final time; after day close shows **Worked (final)**;
+  overtime badge never appears while pending.
+- Register row and drawer show the pending marker; Register CSV and Late/Overtime CSV contain the Source column with
+  the values of 12.2-36; all other columns identical to before (diffed against a pre-0012 export of the same data).
+- Timeline says "biometric device", never "location verified"; review queue shows `correction_needed` with no Accept.
+- Admin settings shows shift-gap warnings.
+pg_cron is not available on the local PostgreSQL (only `btree_gist`, `pgcrypto`), so locally the procedure is called
+directly; the schedule is verified on hosted only after separate approval (Q1).
 
 ---
 
@@ -417,32 +564,57 @@ the procedure is called directly; the schedule is verified only on hosted after 
 | Item | State |
 |---|---|
 | Migrations 0010 (core) and 0011 (gateway) | **Implemented, locally tested, approved for local development.** Not hosted. |
-| Correction lock wrapper | **Proposed**; SQL exists only as `tests/concurrency/proposed_correction_lock.sql`, applied to throwaway copies by `lock_proof.sh` (proven). Not in any migration. |
-| `pg_cron` availability check | Implemented, read-only (`deploy/check_biometric_prereqs.sql` check 6). Nothing installed. |
-| Everything in §4–§11 and Appendix A (columns, constraints, guard, functions, procedure, `day_events`, verification outcome, UI labels, script reorder) | **Proposed only.** Not written as a migration, not compiled, not executed. |
+| Correction lock wrapper | **Proposed**; SQL exists only as `tests/concurrency/proposed_correction_lock.sql`, proven on throwaway copies by `lock_proof.sh`. Not in any migration. |
+| `pg_cron` availability check | Implemented, read-only (`deploy/check_biometric_prereqs.sql` check 6). Nothing installed (Q1). |
+| Source-value preflight | **Proposed** (A0, plus a read-only pre-check). Not run anywhere. |
+| Everything else in §4–§11 and Appendix A (columns, constraints, guard, statuses, functions, procedure, `day_events`, `biometric_day_pending`, `attendance_day_sources`, warnings, retry, verification outcome, UI, CSV Source column, script reorder) | **Proposed only.** Not written as a migration or code, not compiled, not executed. |
 | Tests in §12.2–§12.4 | **Planned only.** Not written. |
 | Real hardware, hosted project, deployment | Not done. |
 
 ---
 
-## 14. Owner questions before implementation
+## 14. Owner decisions (B3.4 review, 20 Nov 2026)
 
-| # | Question | Proposed default |
+| # | Decision | Applied in this design |
 |---|---|---|
-| Q1 | Install `pg_cron` on the hosted project (needed for day close and the queue). | Yes, when hosted is approved; until then local only. |
-| Q2 | Unauthenticated LAN devices: HR accepts each punch (as now), or add a bulk "accept this device's punches from … to …" with one reason, recorded per punch? | Per punch in 0012; bulk only if you ask for it. |
-| Q3 | When projection is switched off, finish days already started (default here) or stop everything at once? | Finish started days. |
-| Q4 | A day ending with a counted in and no out leaves the person "checked in" until a correction — same as an app user who forgets. Change the engine later (separate decision), or keep? | Keep (no engine change in 0012). |
-| Q5 | No voiding and no HR-raised corrections: a wrongly projected row can only be replaced by the employee's own correction request. Add HR-raised corrections in a later phase? | Later phase. |
-| Q6 | `work_mode` of biometric rows: always `office` (devices are at an office), or the roster's mode? | `office`. |
-| Q7 | Live minutes run until day close for biometric-only staff (up to 2 h too many on "today" screens). Acceptable, or show "Provisional" minutes separately in B6? | Acceptable; label in UI. |
-| Q8 | Shifts closer together than `day_close_after_min`: earlier day closes at the next day's first punch. Acceptable? | Yes; warn in settings. |
-| Q9 | Add a "Source" column to register/CSV exports? | Not in 0012. |
-| Q10 | Imports (0013): project only after the batch is approved by HR, through the same gate? | Yes, designed in 0013. |
+| Q1 | pg_cron is required for hosted automation. Not installed now; hosted availability verified later under a separate approval. | Schedule statement not in 0012 (A9); local tests call the procedure; hosted keeps projection off until approved (F5). |
+| Q2 | Unauthenticated LAN devices: individual HR acceptance per punch; no bulk acceptance in this phase. | No bulk function; test 12.2-12. Acceptance never bypasses session safety. |
+| Q3 | When projection is disabled: finish days that already have projected slots; start no new employee-day. | §6.1, test 12.2-4. |
+| Q4 | Keep existing behaviour for forgotten check-outs; no engine change. | §6.6; engine untouched. |
+| Q5 | HR-created corrections are a later phase; 0012 not expanded. | `correction_needed` routes to the employee's correction request. |
+| Q6 | Biometric attendance uses office work mode and the registered device office/location. | `work_mode = 'office'`, `location_id` = device office; device without office → `held`. |
+| Q7 | Provisional minutes shown separately with a pending-checkout label; never final hours. | §11.2. |
+| Q8 | Warn Admin when shift gaps are shorter than the day-close period; never modify settings silently. | `biometric_shift_gap_warnings`; §7, F18. |
+| Q9 | Source column in CSV attendance exports (Web, Biometric, Imported, Correction); other fields and calculations preserved. | §11.3, `attendance_day_sources`. |
+| Q10 | Future CSV/Excel imports approved by HR before projection, same validation and correction rules. | Imports held (`import_not_enabled`) in 0012; 0013 releases only approved batches through the same gate. |
+
+No open questions remain for 0012.
 
 ---
 
 ## Appendix A — proposed SQL for `0012_biometric_projection.sql` (NOT a migration; not compiled or run)
+
+### A0. Source-value preflight (first statement of 0012)
+```sql
+-- Stops the whole migration, changing nothing, if any existing attendance row has a source value 0012 does not know.
+-- Historical rows are never rewritten or deleted to make the new check pass.
+do $$
+declare bad text;
+begin
+  select string_agg(format('%s (%s rows)', coalesce(quote_literal(source), 'NULL'), n), ', ' order by source)
+    into bad
+    from (select source, count(*) n from public.attendance_events
+           where source is null or source not in ('web', 'correction') group by source) x;
+  if bad is not null then
+    raise exception 'Migration 0012 stopped before any change: unexpected attendance_events.source values: %', bad
+      using errcode = 'P0001', hint = 'Report these values to the owner. Do not edit attendance history to pass this check.';
+  end if;
+end $$;
+```
+The same query, read-only, becomes a new check in `deploy/check_biometric_prereqs.sql` so the owner can run it on a
+hosted project **before** approving 0012 (it lists the distinct values and their counts; it changes nothing).
+`biometric` and `import` are deliberately *not* accepted by the preflight: before 0012 no such rows can exist, so
+finding one means something wrote to the table outside the known code.
 
 ### A1. `attendance_events` — additive columns, checks, indexes
 ```sql
@@ -529,17 +701,21 @@ create trigger external_guard before insert or update on public.attendance_event
 ```sql
 alter table public.biometric_event_state
   add column hold_reason text check (hold_reason is null or hold_reason in ('employee_inactive', 'after_exit', 'before_joining',
-    'non_working_day', 'on_leave', 'correction_pending', 'import_not_enabled')),
+    'non_working_day', 'on_leave', 'correction_pending', 'import_not_enabled', 'device_without_office')),
   add column projection_failures smallint not null default 0 check (projection_failures between 0 and 100);
 -- status list gains 'held' (constraint names are read from pg_constraint in the migration; shown here by meaning)
 alter table public.biometric_event_state drop constraint biometric_event_state_status_check;
 alter table public.biometric_event_state add constraint biometric_event_state_status_check check (status in ('stored', 'unmatched',
   'flagged', 'projected', 'provisional_out', 'extra', 'possible_duplicate', 'reconciled', 'after_correction', 'rejected',
-  'dismissed', 'held'));
+  'dismissed', 'held', 'correction_needed'));
+-- correction_needed: the punch can only reach the register through an approved attendance correction (session safety
+-- and sequence problems, §6.6). HR acceptance cannot project it; HR may dismiss it; an approved correction for the day
+-- turns it into after_correction.
 alter table public.biometric_event_state add constraint biometric_event_state_hold check ((status = 'held') = (hold_reason is not null));
 alter table public.biometric_event_state add constraint biometric_event_state_held_mapped check (status <> 'held' or mapping_id is not null);
 create index biometric_event_state_due on public.biometric_event_state (company_id, work_date, employee_id)
   where status in ('stored', 'held', 'provisional_out');
+-- biometric_event_reviews.action list is unchanged: 'dismiss' now also ends a correction_needed punch (A6).
 
 -- biometric_state_guard (create or replace) gains, in the UPDATE branch:
 --   if old.work_date is not null and new.work_date is distinct from old.work_date then
@@ -658,7 +834,7 @@ declare
   out_row public.attendance_events;
   r_ids bigint[] := '{}';
   r_at timestamptz[] := '{}';
-  in_raw bigint; base_in timestamptz; in_decided boolean;
+  in_raw bigint; base_in timestamptz;
   out_raw bigint;
   ev_id bigint;
   last_kind text;
@@ -698,13 +874,15 @@ begin
       then 'correction_pending' end;
 
   -- 1. gate new punches (§6.2)
-  for c in select s.raw_event_id id, s.decided, s.flag_reasons, r.punch_at, r.source_auth, r.time_flags, r.import_batch_id
+  for c in select s.raw_event_id id, s.decided, s.flag_reasons, r.punch_at, r.source_auth, r.time_flags, r.import_batch_id,
+                  (select d.location_id from public.biometric_devices d where d.id = r.device_id) device_office
              from public.biometric_event_state s join public.biometric_raw_events r on r.id = s.raw_event_id
             where s.employee_id = p_emp and s.work_date = p_day and s.status in ('stored', 'held')
             order by r.punch_at, s.raw_event_id loop
     if c.punch_at > now() then continue; end if;
     if c.import_batch_id is not null then perform public.biometric_set_role(c.id, 'held', p_hold => 'import_not_enabled');
     elsif locked then perform public.biometric_set_role(c.id, 'after_correction');
+    elsif c.device_office is null then perform public.biometric_set_role(c.id, 'held', p_hold => 'device_without_office');   -- Q6
     elsif hold is not null then perform public.biometric_set_role(c.id, 'held', p_hold => hold);
     elsif not c.decided and c.source_auth <> 'authenticated' then perform public.biometric_set_role(c.id, 'flagged', p_flag => 'unauthenticated_source');
     elsif not c.decided and (cardinality(c.time_flags) > 0 or cardinality(c.flag_reasons) > 0) then perform public.biometric_set_role(c.id, 'flagged');
@@ -719,7 +897,8 @@ begin
   end loop;
   if locked then  -- a provisional out on a corrected day is no longer a candidate (§7.1 of the architecture)
     for c in select raw_event_id id from public.biometric_event_state
-              where employee_id = p_emp and work_date = p_day and status in ('provisional_out', 'extra', 'reconciled') and not decided loop
+              where employee_id = p_emp and work_date = p_day
+                and (status = 'correction_needed' or (status in ('provisional_out', 'extra', 'reconciled') and not decided)) loop
       perform public.biometric_set_role(c.id, 'after_correction');
     end loop;
     return jsonb_build_object('ok', true, 'locked', true);
@@ -736,7 +915,7 @@ begin
                   and direction_basis <> case when modes[1] = 'device' then 'device' else 'inferred_first_last' end) then
     for c in select s.raw_event_id id from public.biometric_event_state s
               where s.employee_id = p_emp and s.work_date = p_day and s.status in ('stored', 'provisional_out') loop
-      perform public.biometric_set_role(c.id, 'flagged', p_flag => 'mixed_direction_modes');
+      perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'mixed_direction_modes');
     end loop;
     return jsonb_build_object('ok', true, 'flagged', 'mixed_direction_modes');
   end if;
@@ -753,24 +932,33 @@ begin
               where s.employee_id = p_emp and s.work_date = p_day and r.punch_at <= now() and s.projected_event_id is null
                 and (s.status = 'stored' or (s.status in ('extra', 'reconciled') and not s.decided))
               order by r.punch_at, s.raw_event_id loop
-      if c.direction is null then perform public.biometric_set_role(c.id, 'flagged', p_flag => 'no_direction'); continue; end if;
+      if c.direction is null then perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'no_direction'); continue; end if;
+      -- the same key pressed on two devices, or pressed again within the double-press window: one punch
+      if exists (select 1 from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day and e.superseded_by is null
+                   and e.source = 'biometric' and e.kind = c.direction and abs(extract(epoch from e.at - c.punch_at)) <= st.double_press_s) then
+        perform public.biometric_set_role(c.id, 'extra', p_flag => 'double_press'); continue;
+      end if;
       select e.id into ev_id from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day and e.superseded_by is null
          and e.kind = c.direction and e.source in ('web', 'correction') and abs(extract(epoch from e.at - c.punch_at)) <= st.reconcile_min * 60
        order by abs(extract(epoch from e.at - c.punch_at)) limit 1;
       if ev_id is not null then perform public.biometric_set_role(c.id, 'reconciled', p_reconciled => ev_id); continue; end if;
       select max(at) into newest from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null;
-      if newest is not null and c.punch_at <= newest then perform public.biometric_set_role(c.id, 'flagged', p_flag => 'out_of_order'); continue; end if;
+      if newest is not null and c.punch_at <= newest then perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'out_of_order'); continue; end if;
       select kind into last_kind from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null
        order by at desc, id desc limit 1;
       select * into ss from public.session_state(p_emp);
+      -- a repeat of the direction just counted, within the reconciliation window, is an extra punch (not an error)
+      if c.direction = last_kind and newest is not null and c.punch_at - newest <= make_interval(mins => st.reconcile_min) then
+        perform public.biometric_set_role(c.id, 'extra', p_flag => 'repeat_' || c.direction); continue;
+      end if;
       if (c.direction = 'in' and (last_kind in ('in', 'break_start', 'break_end')
              or (ss.state <> 'off' and ss.work_date <> p_day and now() < public.biometric_day_close_at(p_emp, ss.work_date))))
          or (c.direction = 'out' and coalesce(last_kind, 'out') in ('out', 'break_start')) then
-        perform public.biometric_set_role(c.id, 'flagged', p_flag => 'impossible_transition'); continue;
+        perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'impossible_transition'); continue;
       end if;
-      if c.direction = 'in' and closed and not c.decided
+      if c.direction = 'in' and closed                              -- session safety: HR acceptance does NOT bypass this
          and c.punch_at > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity') then
-        perform public.biometric_set_role(c.id, 'flagged', p_flag => 'would_open_closed_day'); continue;
+        perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day'); continue;
       end if;
       ev_id := public.biometric_write_slot(p_emp, p_day, 'dev:' || c.id, c.direction, c.id, 'device');
       perform public.biometric_set_role(c.id, 'projected', ev_id, 'dev:' || c.id);
@@ -797,7 +985,7 @@ begin
       perform public.biometric_set_role(c.id, 'reconciled', p_reconciled => app_out.id); continue;
     end if;
     if app_in.id is not null and c.punch_at < app_in.at then
-      perform public.biometric_set_role(c.id, 'flagged', p_flag => 'before_app_checkin'); continue;
+      perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'before_app_checkin'); continue;
     end if;
     r_ids := r_ids || c.id; r_at := r_at || c.punch_at;
   end loop;
@@ -808,7 +996,7 @@ begin
   elsif in_row.id is not null then
     in_raw := in_row.biometric_event_id; base_in := in_row.at;
     if cardinality(r_ids) > 0 and r_ids[1] <> in_raw and r_at[1] < in_row.at then
-      if closed then perform public.biometric_set_role(r_ids[1], 'flagged', p_flag => 'after_day_close');
+      if closed then perform public.biometric_set_role(r_ids[1], 'correction_needed', p_flag => 'after_day_close');
                      r_ids := r_ids[2:]; r_at := r_at[2:];
       else in_raw := r_ids[1]; base_in := r_at[1]; end if;
     end if;
@@ -823,19 +1011,18 @@ begin
     end loop;
   end if;
   if out_row.id is not null and out_raw is distinct from out_row.biometric_event_id then   -- a counted check-out never moves
-    if out_raw is not null then perform public.biometric_set_role(out_raw, 'flagged', p_flag => 'after_day_close'); end if;
+    if out_raw is not null then perform public.biometric_set_role(out_raw, 'correction_needed', p_flag => 'after_day_close'); end if;
     out_raw := out_row.biometric_event_id;
   end if;
 
   -- session protection for a new in (§6.6)
   if in_raw is not null and in_row.id is null then
-    select decided into in_decided from public.biometric_event_state where raw_event_id = in_raw;
     select * into ss from public.session_state(p_emp);
     if ss.state <> 'off' and ss.work_date <> p_day and now() < public.biometric_day_close_at(p_emp, ss.work_date) then
-      perform public.biometric_set_role(in_raw, 'flagged', p_flag => 'open_session_other_day'); in_raw := null; out_raw := null;
-    elsif closed and out_raw is null and not in_decided
+      perform public.biometric_set_role(in_raw, 'correction_needed', p_flag => 'open_session_other_day'); in_raw := null; out_raw := null;
+    elsif closed and out_raw is null                                 -- session safety: HR acceptance does NOT bypass this
           and base_in > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity') then
-      perform public.biometric_set_role(in_raw, 'flagged', p_flag => 'would_open_closed_day'); in_raw := null;
+      perform public.biometric_set_role(in_raw, 'correction_needed', p_flag => 'would_open_closed_day'); in_raw := null;
     end if;
   end if;
 
@@ -954,12 +1141,99 @@ begin
    where s.employee_id = p_emp and s.work_date = p_day and s.status <> 'projected'
    order by 1, 3 desc;
 end $$;
+
+-- Pending biometric check-out for one person-day: drives the "provisional" display (§11.2). Read-only.
+create function public.biometric_day_pending(p_emp uuid, p_day date,
+  out pending_checkout boolean, out provisional_out_at timestamptz, out final_at timestamptz)
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if not public.can_see(p_emp) then raise exception 'Not allowed' using errcode = '42501'; end if;
+  select r.punch_at into provisional_out_at
+    from public.biometric_event_state s join public.biometric_raw_events r on r.id = s.raw_event_id
+   where s.employee_id = p_emp and s.work_date = p_day and s.status = 'provisional_out'
+   order by r.punch_at desc limit 1;
+  pending_checkout := provisional_out_at is not null;
+  final_at := case when pending_checkout then public.biometric_day_close_at(p_emp, p_day) end;
+end $$;
+
+-- Per person-day sources of the counted events and pending check-outs, same scope and filters as report_days
+-- (company, can_see, department, employee; at most 93 days). Used by the register/detail CSV "Source" column
+-- and the register's "pending check-out" marker. report_days itself is not changed.
+create function public.attendance_day_sources(p_from date, p_to date, p_department uuid default null, p_employee uuid default null)
+returns table (employee_id uuid, work_date date, sources text[], pending_checkout boolean)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+declare cid uuid := public.my_company();
+begin
+  if cid is null then raise exception 'Not allowed' using errcode = '42501'; end if;
+  if p_from is null or p_to is null or p_to < p_from or p_to - p_from > 92 then raise exception 'Choose a range of up to 93 days'; end if;
+  return query
+  with people as (
+    select e.id from public.employees e
+     where e.company_id = cid and public.can_see(e.id)
+       and (p_department is null or e.department_id = p_department) and (p_employee is null or e.id = p_employee)
+  ), counted as (
+    select ev.employee_id, ev.work_date, array_agg(distinct ev.source order by ev.source) srcs
+      from public.attendance_events ev join people pp on pp.id = ev.employee_id
+     where ev.work_date between p_from and p_to and ev.superseded_by is null and ev.kind in ('in', 'out')
+     group by 1, 2
+  ), pending as (
+    select distinct s.employee_id, s.work_date from public.biometric_event_state s join people pp on pp.id = s.employee_id
+     where s.work_date between p_from and p_to and s.status = 'provisional_out'
+  )
+  select coalesce(c.employee_id, p.employee_id), coalesce(c.work_date, p.work_date), coalesce(c.srcs, '{}'), p.employee_id is not null
+    from counted c full join pending p on p.employee_id = c.employee_id and p.work_date = c.work_date;
+end $$;
+
+-- Q8: Admin warning only. People with an active biometric mapping whose next shift starts before the previous day
+-- closes for projection. Read-only; changes no shift, roster or setting.
+create function public.biometric_shift_gap_warnings(p_days int default 14)
+returns table (employee_id uuid, full_name text, work_date date, day_closes_at timestamptz, next_shift_starts_at timestamptz, gap_min int)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+declare cid uuid := public.biometric_require(true);
+begin
+  return query
+  select e.id, e.full_name, g::date, public.biometric_day_close_at(e.id, g::date), nx.starts,
+         floor(extract(epoch from nx.starts - public.biometric_day_close_at(e.id, g::date)) / 60)::int
+    from public.employees e
+    cross join generate_series(public.local_today(cid), public.local_today(cid) + least(greatest(p_days, 1), 31), interval '1 day') g
+    cross join lateral (
+      select public.at_local(cid, g::date + 1, sh.start_time) starts
+        from public.shift_for(e.id, g::date + 1) f join public.shifts sh on sh.id = f.shift_id
+       where (select p.work_mode from public.plan_for(e.id, g::date + 1) p) <> 'off') nx
+   where e.company_id = cid and e.active
+     and exists (select 1 from public.biometric_employee_mappings m where m.employee_id = e.id and m.valid_to is null)
+     and (select p.work_mode from public.plan_for(e.id, g::date) p) <> 'off'
+     and nx.starts < public.biometric_day_close_at(e.id, g::date)
+   order by 3, 2;
+end $$;
+
+-- Admin: retry a day that failed three times (after the cause is fixed). Same lock and function as the queue.
+create function public.biometric_retry_day(p_emp uuid, p_day date) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare cid uuid := public.biometric_require(true);
+begin
+  if public.emp_company(p_emp) is distinct from cid then raise exception 'Not allowed' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_emp::text, 7));
+  update public.biometric_event_state set projection_failures = 0 where employee_id = p_emp and work_date = p_day;
+  insert into public.audit_log (company_id, action, target, target_id, after)
+    values (cid, 'biometric_retry_day', 'employees', p_emp::text, jsonb_build_object('work_date', p_day));
+  return public.biometric_project_day(p_emp, p_day);
+end $$;
 ```
 
-### A6. Review: accepted punches are picked up again
+### A6. Review changes (`biometric_review_event`, create or replace — biometric function)
 ```sql
--- biometric_review_event (create or replace): the UPDATE gains
---   processed_at = case when next_status = 'stored' then null else processed_at end
+-- 1. a correction_needed punch can be dismissed (with a reason) even if HR had accepted it earlier for another
+--    reason; nothing else can be done to it here — it reaches the register only through an approved correction:
+--      if s.decided and s.status <> 'correction_needed' then return ... 'already been decided' ...
+--      when s.status = 'correction_needed' and p_action = 'dismiss' then 'dismissed'
+--      when s.status = 'correction_needed' then  -> message: 'This punch would affect the person's check-in state.
+--           Ask the employee to request an attendance correction for <work date>.'
+-- 2. accepted punches are picked up again by the queue:
+--      processed_at = case when next_status = 'stored' then null else processed_at end
+-- 3. 'accept_time' remains possible only on status 'flagged' (soft reasons, §6.2) — unchanged.
 ```
 
 ### A7. Correction lock wrapper (as approved; identical to the proven proposal)
@@ -994,13 +1268,19 @@ revoke all on function public.biometric_work_date_at(uuid, timestamptz, text), p
   public.biometric_write_slot(uuid, date, text, text, bigint, text, text),
   public.biometric_project_day(uuid, date), public.attendance_external_guard() from public, anon, authenticated;
 revoke all on procedure public.biometric_run_projection(int) from public, anon, authenticated;
-revoke all on function public.biometric_project_now(uuid, date), public.day_events(uuid, date) from public, anon;
-grant execute on function public.biometric_project_now(uuid, date), public.day_events(uuid, date) to authenticated;
+revoke all on function public.biometric_project_now(uuid, date), public.day_events(uuid, date),
+  public.biometric_day_pending(uuid, date), public.attendance_day_sources(date, date, uuid, uuid),
+  public.biometric_shift_gap_warnings(int), public.biometric_retry_day(uuid, date) from public, anon;
+grant execute on function public.biometric_project_now(uuid, date), public.day_events(uuid, date),
+  public.biometric_day_pending(uuid, date), public.attendance_day_sources(date, date, uuid, uuid),
+  public.biometric_shift_gap_warnings(int), public.biometric_retry_day(uuid, date) to authenticated;   -- each checks its own role/scope
 -- NOT in 0012 (hosted, after approval of Q1):
 --   select cron.schedule('attendos-biometric-projection', '* * * * *', 'call public.biometric_run_projection(200)');
 ```
 - `deploy/delete_company.sql`: delete `biometric_event_state` → `attendance_coords` → `attendance_events` → the
   other biometric tables (raw events after attendance events).
+- `deploy/check_biometric_prereqs.sql`: new read-only check — distinct `attendance_events.source` values with counts;
+  passes only for `web` / `correction` (the preflight of A0, run before approval).
 - `deploy/verify_hosted.sql`: new checks — the new functions are not executable by anon/authenticated (except
   `day_events`, `biometric_project_now` for authenticated), `decide_correction_core` executable by nobody,
   both new triggers present, projection off for every company until enabled.

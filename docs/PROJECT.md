@@ -302,5 +302,9 @@ changed). B3.4 (20 Nov 2026): **design only** for migration 0012 (attendance pro
 docs/biometric/BIOMETRIC_B3_4_PROJECTION_DESIGN.md: per employee-day projection by a pg_cron procedure under the
 punch lock (7), stable slot rows with raw-punch links, provisional check-out kept off the register until day close,
 gate/holds/review routing, correction lock wrapper, Biometric/Imported labels. Nothing implemented; no existing
-function changed. Awaiting owner review and answers to Q1–Q10 before 0012 is written.
+function changed. Revision 2 (20 Nov 2026, owner review): HR acceptance never bypasses session safety (new status
+`correction_needed`, reachable only through an approved correction), source-value preflight that stops 0012 without
+changes, provisional time shown separately from final hours, explicit device-direction transition rules and tests,
+owner decisions Q1–Q10 applied (pg_cron later under separate approval; per-punch acceptance; CSV Source column; Admin
+shift-gap warning). Still design only; awaiting final approval before 0012 is written.
 
