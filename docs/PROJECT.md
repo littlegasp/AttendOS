@@ -276,3 +276,10 @@ B1 revision 3 (20 Nov 2026, documents only): provisional check-outs are display-
 rows, finalised at day close with no engine change; local push receiver authentication/validation rules; Sync Agent
 queue encrypted with SQLCipher (official edition) and separate DPAPI-protected secrets; decision wording corrected to
 "recommended defaults accepted for planning; final owner sign-off pending".
+
+## Biometric Phase B2 — device management UI on demonstration data (20 Nov 2026)
+Configuration → Biometric Devices (`/biometric`, Admin + HR, new capability `biometric`): overview, devices, add-device
+wizard, device detail, employee mapping, sync activity, review queue. All data is local mock state
+(`src/lib/biometric-mock.ts`) except people and offices, which are read-only real records when connected. No
+migrations, functions, gateway, agent or device connections. Details: docs/biometric/BIOMETRIC_B2_DEVICE_UI.md.
+

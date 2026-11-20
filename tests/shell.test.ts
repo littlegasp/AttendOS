@@ -16,7 +16,7 @@ test("every menu item has a route that shares the shell", () => {
 
 test("navigation groups match the guide", () => {
   assert.deepEqual(NAV.map((g) => g.label), ["Workspace", "Management", "Insights", "Configuration"]);
-  assert.equal(ALL_ITEMS.length, 12);
+  assert.equal(ALL_ITEMS.length, 13);
 });
 
 test("role matrix follows the guide", () => {

@@ -35,7 +35,8 @@ export type Capability =
   | "viewAudit"
   | "manageLeave"
   | "decideLeave"
-  | "exportReports";
+  | "exportReports"
+  | "biometric";
 
 export const ROLES: { id: Role; label: string }[] = [
   { id: "admin", label: "Admin" },
@@ -69,6 +70,7 @@ export const MATRIX: Record<Capability, Record<Role, Scope>> = {
   manageLeave: { admin: "all", hr: "all", manager: "none", employee: "none" }, // leave types, balance adjustments, record leave for someone
   decideLeave: { admin: "all", hr: "all", manager: "team", employee: "none" },
   exportReports: { admin: "all", hr: "all", manager: "team", employee: "own" }, // exports follow the same scope as the screen
+  biometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // biometric devices, mappings, sync, review queue (B2: demonstration data only)
 };
 
 export function scopeOf(role: Role, cap: Capability): Scope {
@@ -122,4 +124,5 @@ export const CAP_LABEL: Record<Capability, string> = {
   manageLeave: "Leave types & balances",
   decideLeave: "Approve leave",
   exportReports: "Export reports",
+  biometric: "Biometric devices (demonstration)",
 };

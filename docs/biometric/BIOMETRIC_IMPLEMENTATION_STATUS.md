@@ -1,12 +1,12 @@
 # Biometric integration — implementation status
 
-Branch `feature/biometric-b1` (from `phase-4-5` @ `0fcec08`). Updated 20 Nov 2026 (B1 revision 3).
+Branch `feature/biometric-b1` (from `phase-4-5` @ `0fcec08`). Updated 20 Nov 2026 (B1 revision 3; B2 UI).
 Labels: **Implemented · Locally tested · Mock tested · Tested with real hardware · Hosted verified · Not yet implemented.**
 
 | Phase | Scope | Status |
 |---|---|---|
 | **B1** Architecture & database design | Audit, architecture, schema & migration plan, adapter contract, agent design, security, hardware research, test plan | **Revision 3 written (owner clarifications applied) — awaiting final B1 approval.** No migration, function, UI or agent code. |
-| B2 Device management UI | Overview, devices, add-device steps, mapping, sync activity, review queue — on mock data | Not yet implemented |
+| B2 Device management UI | Overview, devices, add-device wizard, device detail, mapping, sync activity, review queue — on mock data | **Implemented; locally tested with mock data** (BIOMETRIC_B2_DEVICE_UI.md). No backend, no hardware. Awaiting owner review. |
 | B3 Gateway | `biometric_ingest`, heartbeat, keys, normalisation, idempotency, errors | Not yet implemented |
 | B4 Sync Agent | Service, queue, uploader, heartbeat, mock adapter | Not yet implemented |
 | B5 First real adapter | On the hardware chosen in D9 | Not yet implemented — needs hardware |
@@ -16,7 +16,8 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 
 | Item | Implemented | Locally tested | Mock tested | Real hardware | Hosted |
 |---|---|---|---|---|---|
-| Any biometric feature | No | No | No | No | No |
+| B2 screens (demonstration data) | Yes | Yes (44 app, 40 browser, 360 DB, 29 regression) | Yes — UI only, mock state | No | No |
+| Gateway, agent, adapters, projection | No | No | No | No | No |
 
 Unchanged by B1: application commit `6d47386`, all migrations 0001–0009, the Pilot 01 pack. Nothing deployed,
 no hosted migration, no tag, no merge.

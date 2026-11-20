@@ -12,7 +12,8 @@ export type IconName =
   | "analytics"
   | "department"
   | "shield"
-  | "gear";
+  | "gear"
+  | "fingerprint";
 
 export interface NavItem {
   href: string;
@@ -61,6 +62,7 @@ export const NAV: NavGroup[] = [
     label: "Configuration",
     items: [
       { href: "/departments", label: "Departments", icon: "department", cap: "departments", phase: 3, blurb: "Departments, heads and designations" },
+      { href: "/biometric", label: "Biometric Devices", icon: "fingerprint", cap: "biometric", phase: 7, blurb: "Biometric machines, employee codes, sync activity and review queue (demonstration data)" },
       { href: "/roles", label: "Roles & Permissions", icon: "shield", cap: "roles", phase: 5, blurb: "Who can see and do what" },
       { href: "/settings", label: "Settings", icon: "gear", cap: "settings", phase: 5, blurb: "Organization, attendance policy and GPS" },
     ],

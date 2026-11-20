@@ -878,3 +878,42 @@ html[data-theme="dark"] .map .leaflet-tile-pane { filter: invert(1) hue-rotate(1
 .accent-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; border: 1px solid var(--color-border); }
 /* Scroll areas contain their own absolutely positioned bits (screen-reader labels), so nothing escapes on phones. */
 .tabs, .emp-filters, .month-grid-wrap { position: relative; }
+
+/* ---------------- Biometric devices (B2, demonstration data) ---------------- */
+.bio-demo strong { display: block; }
+.bio-kpi-time { font-size: 22px; }
+.bio-attn { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.bio-attn li { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: baseline; }
+.bio-later { margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: .02em; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--color-border); color: var(--color-text-2); }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.bio-sync td, .bio-sync th { white-space: nowrap; }
+.bio-sync td:last-child { white-space: normal; min-width: 220px; }
+.bio-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--s2); overflow-x: auto; padding-bottom: 4px; }
+.bio-steps li { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px; border: 1px solid var(--glass-edge); font-size: 12px; color: var(--color-text-2); }
+.bio-steps li.on { border-color: var(--color-primary); background: var(--active-bg); color: var(--color-text); font-weight: 600; }
+.bio-steps li.done { color: var(--color-text); }
+.bio-step-n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 999px; background: var(--hover); font-size: 11px; font-weight: 700; }
+.bio-steps li.on .bio-step-n { background: var(--color-primary); color: var(--color-on-primary); }
+.bio-choice { display: grid; gap: var(--s2); grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.bio-choice-item { position: relative; display: flex; flex-direction: column; gap: 4px; padding: var(--s3) var(--s3) var(--s3) 40px; border: 1px solid var(--glass-edge); border-radius: 12px; cursor: pointer; color: var(--color-text); }
+.bio-choice-item:hover { background: var(--hover); }
+.bio-choice-item.on { border-color: var(--color-primary); background: var(--active-bg); }
+.bio-choice-item input { position: absolute; left: 14px; top: 15px; accent-color: var(--color-primary); width: 16px; height: 16px; }
+.bio-choice-item:focus-within { box-shadow: var(--ring); }
+.bio-review { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+.bio-review-item { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s5); justify-content: space-between; padding: var(--s4); border: 1px solid var(--glass-edge); border-radius: 14px; }
+.bio-review-main { flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.bio-review-head { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.bio-review-actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: flex-start; align-content: flex-start; flex: 0 1 260px; }
+.rules-view.compact { gap: 4px var(--s4); font-size: 13px; }
+@media (max-width: 767px) {
+  .bio-review-actions { flex-basis: 100%; }
+  .bio-choice { grid-template-columns: 1fr; }
+}
+.bio-kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.bio-unmapped li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s4); }
+.bio-unmapped li > div { flex: 1 1 260px; min-width: 0; }
+.bio-unmapped li > .btn { flex: none; }
+.bio-log li { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 2px var(--s4); }
+.bio-log li > div { flex: 1 1 260px; min-width: 0; }
+.bio-log .audit-when { flex: none; white-space: nowrap; }
