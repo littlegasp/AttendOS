@@ -1,11 +1,11 @@
-# Biometric B3.4 — attendance projection design (migration 0012), revision 5
+# Biometric B3.4 — attendance projection design (migration 0012), revision 6
 
-Status: **revision 5, design for final approval — 20 Nov 2026** (guard and budget corrections applied, §0.3;
+Status: **revision 6, design for final approval — 20 Nov 2026** (source-transition guard, §0.4; revision 5 in §0.3,
 revision 4 in §0.2, revision 3 in §0.1, revision 2 in §0). Design review only — not an implementation approval. Nothing in
 this document is implemented. Migration
 `0012_biometric_projection.sql` has **not** been written; no existing attendance function has been altered; no SQL
 was run against any hosted project; no extension installed; no hardware connected; no merge, no deployment.
-Baseline: branch `feature/biometric-b1` @ `b712b5d` (revision 4 of this design) (0010 and 0011 approved for local development). Every statement
+Baseline: branch `feature/biometric-b1` @ `e01f33f` (revision 5 of this design) (0010 and 0011 approved for local development). Every statement
 about current behaviour below was checked by reading migrations 0001–0011 (line references are to those files).
 
 Owner decisions applied (B3.3 authorisation): no voiding column · device time trusted only after validation ·
@@ -51,6 +51,11 @@ functions. Owner decisions Q1–Q10 from the B3.4 review: §14.
 | Strict write budgets | No lower clamp on `p_limit`: a call never writes more than it is given. Every operation of cost *k* runs only if `n + k ≤ limit − 1`, keeping one write for a continuation mark; the slot step (≤ 5 writes) runs whole or not at all; a call given fewer than 6 writes defers the day and writes nothing; the queue stops a step when fewer than 6 writes remain and subtracts the writes actually made. | A4 (`biometric_project_day`), A5 (queue); §6.1, §6.9; §12.2 tests B1–B10 |
 | One write per failure; late release in one write | A failed call is rolled back and costs exactly one write (its error record); failures are counted from unresolved `processing_failure` records (`biometric_day_failures`), replacing the per-punch counter; `biometric_retry_day` resolves them. The late-release mark and the `flagged` change are one `biometric_set_role` write. | A3, A4 (`biometric_set_role`), A5 (`biometric_project_one`, `biometric_retry_day`), A9; §4, §6.1, §9 F3 |
 | Consistency pass | Every Appendix A function re-read against the others (§16). Two fixes found: the "pending" ordering key for two `correction_needed` decisions now reads the punch's real status; the mixed-mode stop no longer writes a needless mark on a `stored` punch. | A4; §16 |
+
+## 0.4 What changed in revision 6 (20 Nov 2026)
+| Correction | Change | Sections changed |
+|---|---|---|
+| Source-transition bypass closed | `attendance_external_guard` now refuses **any** change of `source` on an existing row, first and unconditionally (projection context included): a web/correction row can never become biometric/import, and a projected row can never become anything else. As defence in depth, the full attribution check also runs on `new.source IS DISTINCT FROM old.source`, and a source transition outside the projection context is refused by the projection-only rule. No existing function changes a row's source (`punch_core` and `decide_correction` insert new rows), so the engine is unaffected. | A2; §3 req. 4 and 12; §12.2 tests V1–V8; §15; §16 |
 
 ## 1. The design in one page
 
@@ -111,7 +116,7 @@ functions. Owner decisions Q1–Q10 from the B3.4 review: §14.
 | 1 | Web check-in/out keeps working unchanged | No change to `punch`, `punch_core`, `session_state`, `work_date_for_checkin`, geofence or GPS code. Projection only inserts rows the engine already understands, under the same lock, and never inserts a row that would open a finished day, clash with an open session or break the sequence — not even after HR acceptance (`correction_needed`, §6.6). The existing regression suites must pass unchanged. | §6.6, §12.1–12.2 |
 | 2 | Same employee advisory lock as punch | `biometric_project_day` takes `pg_advisory_xact_lock(hashtextextended(emp::text, 7))` before reading anything. | A4, §8 |
 | 3 | Correction approval uses the approved wrapper | `decide_correction` → `decide_correction_core` (revoked from everyone); new `decide_correction` checks company, takes lock 7, calls the core. Same SQL as `tests/concurrency/proposed_correction_lock.sql`, already proven by `lock_proof.sh`. | A7 |
-| 4 | Stable IDs and correction references | One row per slot, unique `(employee_id, work_date, projection_slot)`; ids never change; projection never deletes, never clears `superseded_by`, never touches `web`/`correction` rows or superseded rows. A guard trigger enforces this. | A1, A2, §6.5 |
+| 4 | Stable IDs and correction references | One row per slot, unique `(employee_id, work_date, projection_slot)`; ids never change; projection never deletes, never clears `superseded_by`, never touches `web`/`correction` rows or superseded rows; no row ever changes its `source`. A guard trigger enforces this. | A1, A2, §6.5 |
 | 5 | Inferred vs explicit direction distinguishable | `direction_basis = 'inferred_first_last'` (slots `in`/`out`) vs `'device'` (slot `dev:<raw id>`); a check ties basis to slot shape. `day_events` labels "Biometric · inferred" / "Biometric · device In/Out". | A1, A5 |
 | 6 | Provisional checkout never finalises | It is the role `provisional_out` on the raw punch, never a row. The day stays open in `day_for_core`, so worked hours, overtime, early leaving and status are not final. Only at day close does projection insert the `out` row. | §6.4 |
 | 7 | Duplicate, unmatched, flagged, unauthenticated events stay out | Only punches passing the gate (§6.2) can fill a slot: attributed, authenticated (or individually accepted by HR), no time or attribution flags, not a possible duplicate, ≤ 2 days old, not in the future, from a device with a registered office. Sequence and session problems become `correction_needed`. Everything else keeps its review status. | §6.2, §6.6 |
@@ -119,7 +124,7 @@ functions. Owner decisions Q1–Q10 from the B3.4 review: §14.
 | 9 | Disabled by default | Unchanged default `projection_enabled = false`; the queue skips such companies. | §6.1 |
 | 10 | Corrections, shifts, overnight, leave, holidays, weekly offs | Pending correction → `held`; approved correction or superseded slot → day locked, new punches `after_correction`; off day / holiday / full-day leave / before joining / after exit → `held`; overnight work date mirrors the app (§7). | §6.3, §7 |
 | 11 | Displays say Biometric or Imported, never GPS-verified | Check constraint: biometric/import rows have `verified = false`, no distance, no accuracy. `verification_log` outcome `biometric` / `imported`; Timeline and Verification badges show "Biometric device" / "Imported"; CSV Source column "Web / Biometric / Imported / Correction". | A1, A8, §11 |
-| 12 | Every projected event traceable | `biometric_event_id` → raw (FK, `on delete restrict`, unique); device id; state back-link `projected_event_id`; the guard re-validates company, person, work day, time, device, import batch and the device's registered office on insert and on any change of the attribution tuple; every insert/move/role change is in `audit_log` with before/after. | A1, A2, A3, §6.7 |
+| 12 | Every projected event traceable | `biometric_event_id` → raw (FK, `on delete restrict`, unique); device id; state back-link `projected_event_id`; the guard re-validates company, person, work day, time, device, import batch and the device's registered office on insert, on any change of the attribution tuple and on any source transition (which is refused outright); every insert/move/role change is in `audit_log` with before/after. | A1, A2, A3, §6.7 |
 
 ---
 
@@ -703,6 +708,39 @@ T8. Device-mode row whose slot name is not `dev:<its raw id>` → refused.
 T9. Device office changed by Admin after projection: existing rows are untouched (no update happens); the next in-place
     move must carry the new office, a move keeping the old office is refused.
 
+**V — source transitions (revision 6).** Each starts from a committed row and is run twice: as a plain definer-context
+update (projection setting off) and with `attendos.projection = on`, to show the projection context does not help.
+Expected result for V1–V6: refused with "The source of an attendance event never changes", row byte-identical
+afterwards (id, source, all columns), no audit row.
+
+V1. `web → biometric` on an app check-in, no other column changed: refused (the shape check would also refuse it,
+    since biometric rows need a raw punch; the guard refuses first).
+
+V2. `web → import` on an app check-in, no other column changed: refused.
+
+V3. `web → biometric` with fabricated references: `biometric_event_id` of a non-existent raw punch; of a real raw
+    punch of another employee; of a real raw punch of the same employee and day but another time; plus a matching
+    `device_id`, `location_id`, `projection_slot = 'in'` and `direction_basis`: all refused.
+
+V4. `web → biometric` that looks valid — the row's time, person and day copied from a real stored raw punch of that
+    person, all biometric columns filled consistently, `verified = false`, distance and accuracy cleared — issued
+    outside projection and again with the projection setting on: refused both times (source never changes; a
+    biometric row can only be created by projection INSERT).
+
+V5. Existing projected biometric row: `biometric → web`, `biometric → correction`, `biometric → import`: refused;
+    likewise for a correction row `correction → web` and `correction → biometric`.
+
+V6. `web → correction` and `correction → web` (no biometric columns involved): refused — no existing code path does
+    this, and the regression suite (12.1) confirms nothing relied on it.
+
+V7. Legitimate projection INSERT of a new `in` slot from a gated raw punch: accepted; row matches the raw punch on
+    every attribution field; one audit row.
+
+V8. Legitimate in-place slot move by projection (earlier punch, same day, unlocked slot): accepted, same row id,
+    `source` still `biometric`; and `decide_correction` superseding that row: accepted (only `superseded_by` changes).
+
+Expected outcomes are specified here; **none of these tests has been written or run** (design only).
+
 **B — strict write budgets (revision 5)**
 
 B1. `biometric_project_day(…, p_limit => 1)` on a day with a stored punch: returns `deferred`, writes nothing (no state,
@@ -823,6 +861,7 @@ directly; the schedule is verified on hosted only after separate approval (Q1).
 | Held-punch backoff, separate queue budget, late-release re-acceptance, null-safe gate (revision 3) | **Proposed only.** |
 | Due check inside projection, per-call write limit, run write budgets, continuation marks, `stored` invariant (revision 4) | **Proposed only.** |
 | Full attribution-tuple guard, strict budgets with deferral, one-write failures (revision 5) | **Proposed only.** |
+| Source-transition refusal in the guard (revision 6) | **Proposed only.** |
 | Everything else in §4–§11 and Appendix A (columns, constraints, guard, statuses, functions, procedure, `day_events`, `biometric_day_pending`, `attendance_day_sources`, warnings, retry, verification outcome, UI, CSV Source column, script reorder) | **Proposed only.** Not written as a migration or code, not compiled, not executed. |
 | Tests in §12.2–§12.4 | **Planned only.** Not written. |
 | Real hardware, hosted project, deployment | Not done. |
@@ -848,7 +887,7 @@ No open questions remain for 0012.
 
 ---
 
-## 15. Final checks of the revised queue (revision 5)
+## 15. Final checks of the revised queue (revision 6)
 Each property checked against the Appendix A SQL by reading; nothing was executed.
 
 | Property | Holds because |
@@ -860,11 +899,12 @@ Each property checked against the Appendix A SQL by reading; nothing was execute
 | Disabled companies start no new employee-day; started days finish | Both queue steps and `biometric_project_day` require `projection_enabled` or an existing projected slot. |
 | Bounded — strictly | Per run: 200 + 50 employee-days and 2,000 + 500 row writes, never exceeded (each call is given at most the remaining budget and the queue subtracts what it wrote); per call: at most `p_limit` writes including the continuation mark; fewer than 6 → deferred, nothing written; the slot step is all-or-nothing; one transaction per employee-day; 5 s lock timeout. |
 | Attribution of every biometric row matches its raw punch | Guard A2 validates the whole tuple on insert and on any change of it (T1–T9). |
+| No row can acquire or lose an external source | Guard A2 refuses every `source` change on UPDATE before any other check, in every context; the attribution check and the projection-only rule also cover a source transition (V1–V8). |
 | No punch lost or skipped | A stop always leaves the rest `stored`, due held, or carrying a continuation mark, and each of those is selected again by the queue (Q4, Q7). |
 | Idempotent | `biometric_set_role` writes only on a change (or to clear a mark); slot writes are no-ops when unchanged; a complete day selected again writes nothing (Q7). |
 | Safe under concurrent runs | Lock 7 serialises each employee-day; due-ness and roles are re-read after the lock; a punch handled by one run is not due / not pending for the next (Q5, H8). |
 
-## 16. Consistency pass over Appendix A (revision 5)
+## 16. Consistency pass over Appendix A (revisions 5 and 6)
 Every proposed function was re-read against the others (reading only; nothing compiled or executed):
 
 | Check | Result |
@@ -877,7 +917,9 @@ Every proposed function was re-read against the others (reading only; nothing co
 | Failure accounting | `biometric_project_one` writes one error record; `biometric_day_failures` and its partial index replace the removed counter; `biometric_retry_day` resolves records (the errors guard allows a single resolution). |
 | Not-due held punches untouched | Lock statement, gate query and held-look update all require `next_check_at <= now()`. |
 | Grants | New helper `biometric_day_failures` and changed signatures (`biometric_set_role` 8 args, `biometric_project_day` 3, procedures 5) revoked from public/anon/authenticated (A9). |
-| Session safety, corrections, stable ids | Unchanged by revision 5; guard keeps the supersession and identity checks. |
+| Session safety, corrections, stable ids | Unchanged by revisions 5 and 6; guard keeps the supersession and identity checks. |
+| Guard paths after revision 6 (re-read in order) | 1) any `source` change → refused; 2) external row update: supersession kept, identity frozen, attribution moves only by projection on an unlocked slot; 3) insert / attribution change / source transition with an external source → projection-only rule, then full raw-punch validation. `biometric_write_slot` (the only writer) inserts with source `biometric` and moves only `at`, `biometric_event_id`, `device_id`, `location_id`; `decide_correction_core` updates only `superseded_by`; neither changes `source`. The shape check (A1) independently refuses a web/correction row carrying biometric columns. |
+| Other Appendix A functions | Re-read for revision 6; no change needed: none of them updates `attendance_events.source`. |
 
 ---
 
@@ -950,6 +992,12 @@ declare
   office uuid;
   projecting boolean := coalesce(current_setting('attendos.projection', true), '') = 'on';
 begin
+  -- (revision 6) the source of an existing row never changes, in either direction and in any context — projection
+  -- included: web/correction rows never become biometric/import rows, and projected rows never become anything else.
+  -- (No existing function changes a row's source: punch_core and decide_correction insert new rows.)
+  if tg_op = 'UPDATE' and new.source is distinct from old.source then
+    raise exception 'The source of an attendance event never changes (% to %)', old.source, new.source using errcode = '42501';
+  end if;
   if tg_op = 'UPDATE' and old.source in ('biometric', 'import') then
     -- correction supersession: set once by decide_correction, never cleared or changed
     if old.superseded_by is not null and new.superseded_by is distinct from old.superseded_by then
@@ -971,12 +1019,14 @@ begin
     end if;
   end if;
 
-  -- full attribution check on INSERT and on ANY change of the attribution tuple (revision 5)
+  -- full attribution check on INSERT, on ANY change of the attribution tuple (revision 5) and on a source transition
+  -- (revision 6; defence in depth — the refusal above already stops every source change)
   if new.source in ('biometric', 'import')
      and (tg_op = 'INSERT'
+          or new.source is distinct from old.source
           or (new.at, new.biometric_event_id, new.device_id, new.import_batch_id, new.location_id)
              is distinct from (old.at, old.biometric_event_id, old.device_id, old.import_batch_id, old.location_id)) then
-    if tg_op = 'INSERT' and not projecting then
+    if (tg_op = 'INSERT' or new.source is distinct from old.source) and not projecting then
       raise exception 'Biometric attendance is written only by projection' using errcode = '42501';
     end if;
     select * into r from public.biometric_raw_events where id = new.biometric_event_id;
