@@ -26,8 +26,8 @@ select pg_temp.expect((select array_agg(p.proname::text order by p.proname) from
   where n.nspname = 'public' and p.proname like 'biometric\_%' and has_function_privilege('authenticated', p.oid, 'execute'))
   = array['biometric_end_mapping', 'biometric_error_payload', 'biometric_raw_payload', 'biometric_register_agent', 'biometric_review_event',
           'biometric_revoke_agent', 'biometric_rotate_agent_key', 'biometric_save_device', 'biometric_save_mapping', 'biometric_save_settings',
-          'biometric_set_device_status', 'biometric_set_direction_mode'],
-  'signed-in users still call only the 12 Admin/HR functions (not the gateway, not its helpers)');
+          'biometric_set_device_auth', 'biometric_set_device_status', 'biometric_set_direction_mode'],
+  'signed-in users call only the 13 Admin/HR functions (12 from 0010 + set_device_auth) — not the gateway, not its helpers');
 select pg_temp.expect(not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public' and (p.proacl is null or exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0))), 'no function is callable by PUBLIC');
 select pg_temp.expect(not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -46,6 +46,18 @@ select pg_temp.act('A admin');
 select set_config('g.k1', biometric_rotate_agent_key(current_setting('t.agent')::uuid) ->> 'agent_key', false);
 select set_config('g.k2', biometric_rotate_agent_key(current_setting('t.agent2')::uuid) ->> 'agent_key', false);
 select set_config('g.reg3', biometric_register_agent('Spare PC', 'spare-pc-01')::text, false);
+-- device authentication is Admin configuration: Main entrance demands a communication key; the plant reader does not
+select pg_temp.expect(biometric_set_device_auth(current_setting('t.dev1')::uuid, 'comm_key') ->> 'ok' = 'true', 'Admin declares that Main entrance requires a communication key');
+select pg_temp.act('A hr');
+select pg_temp.fails(format($$ select biometric_set_device_auth(%L, 'comm_key') $$, current_setting('t.dev2')), 'Not allowed', 'HR cannot change how a device authenticates');
+select pg_temp.act('A admin');
+select set_config('g.devpush', biometric_save_device(null, jsonb_build_object('name', 'Push reader', 'manufacturer', 'zkteco', 'model', 'SpeedFace', 'serial_number', 'PUSH01',
+  'integration_method', 'local_push', 'agent_id', current_setting('t.agent'))) ->> 'device_id', false);
+select pg_temp.expect(biometric_set_device_auth(current_setting('g.devpush')::uuid, 'comm_key') ->> 'message' ~ 'SDK pull', 'a push device cannot be declared key-authenticated');
+select pg_temp.act('owner');
+select pg_temp.fails($$ update biometric_devices set device_auth = 'comm_key' where id = '$$ || current_setting('g.devpush') || $$' $$, 'check constraint', '…and the table refuses it too');
+select pg_temp.expect((select count(*) from audit_log where target = 'biometric_devices' and target_id = current_setting('t.dev1') and after ->> 'device_auth' = 'comm_key') = 1,
+  'the device-authentication setting is audited');
 select pg_temp.act('B admin');
 select set_config('g.kb', biometric_rotate_agent_key(current_setting('t.agentb')::uuid) ->> 'agent_key', false);
 select pg_temp.act('owner');
@@ -80,10 +92,28 @@ rollback;
 select pg_temp.act('anon');
 select pg_temp.expect(biometric_ingest('bak_x', jsonb_build_object('batch_id', gen_random_uuid(), 'events', '[]'::jsonb, 'pad', repeat('x', 270000))) ->> 'code' = 'too_large'
   and biometric_ingest(current_setting('g.k1'), pg_temp.b((select jsonb_agg(pg_temp.ev('ZK001', '0101', now())) from generate_series(1, 201)))) ->> 'code' = 'too_large'
-  and biometric_ingest(current_setting('g.k1'), '{"batch_id":"x","events":{}}') ->> 'code' = 'too_large'
   and biometric_heartbeat(current_setting('g.k1'), jsonb_build_object('pad', repeat('x', 17000))) ->> 'code' = 'too_large',
-  'size caps: > 256 KB, > 200 events, events not a list, heartbeat > 16 KB are refused before any work');
+  'size caps: > 256 KB, > 200 events, heartbeat > 16 KB are refused before any work');
 select pg_temp.expect(biometric_ingest(current_setting('g.k1'), '{"batch_id":"not-a-uuid","events":[]}') ->> 'code' = 'bad_request', 'a batch needs a UUID batch_id');
+select pg_temp.act('owner');
+select set_config('g.before', pg_temp.counts(), false);
+select pg_temp.act('anon');
+select pg_temp.expect(
+  biometric_ingest(current_setting('g.k1'), jsonb_build_object('batch_id', gen_random_uuid())) ->> 'code' = 'bad_request'
+  and biometric_ingest(current_setting('g.k1'), jsonb_build_object('batch_id', gen_random_uuid(), 'events', null)) ->> 'code' = 'bad_request'
+  and biometric_ingest(current_setting('g.k1'), jsonb_build_object('batch_id', gen_random_uuid(), 'events', '{}'::jsonb)) ->> 'code' = 'bad_request'
+  and biometric_ingest(current_setting('g.k1'), jsonb_build_object('batch_id', gen_random_uuid(), 'events', 'a string')) ->> 'code' = 'bad_request'
+  and biometric_ingest(current_setting('g.k1'), jsonb_build_object('batch_id', gen_random_uuid(), 'events', 7)) ->> 'code' = 'bad_request'
+  and biometric_ingest('bak_x', jsonb_build_object('batch_id', gen_random_uuid())) ->> 'code' = 'bad_request',
+  'events missing, null, an object, a string or a number: a clean bad_request (null-safe), even before the key is checked');
+select pg_temp.act('owner');
+select pg_temp.expect(pg_temp.counts() = current_setting('g.before'), 'malformed requests created no sync run, raw event, error record or audit entry');
+select pg_temp.act('anon');
+select set_config('g.empty', biometric_ingest(current_setting('g.k1'), pg_temp.b('[]'))::text, false);
+select pg_temp.expect((current_setting('g.empty')::jsonb ->> 'ok')::boolean and (current_setting('g.empty')::jsonb ->> 'received')::int = 0, 'an empty events list is a valid (empty) batch');
+select pg_temp.act('owner');
+select set_config('g.before', pg_temp.counts(), false); -- the valid empty batch is the only new sync run
+select pg_temp.act('anon');
 select set_config('request.method', 'GET', false);
 select pg_temp.expect(biometric_ingest(current_setting('g.k1'), pg_temp.b('[]')) ->> 'code' = 'use_post' and biometric_heartbeat(current_setting('g.k1'), '{}') ->> 'code' = 'use_post',
   'a GET call (key in the URL) is refused before the key is even checked');
@@ -96,6 +126,7 @@ select pg_temp.fails($$ select biometric_ingest('bak_x', '{}') $$, 'permission d
 -- ================================================================ 3. a normal batch: stored, attributed at punch time, nothing in attendance
 select pg_temp.act('owner');
 select set_config('g.att', (select count(*)::text from attendance_events), false);
+select set_config('g.aud', (select count(*)::text from audit_log where target in ('biometric_agents', 'biometric_devices')), false);
 select set_config('g.t30', (now() - interval '30 minutes')::text, false), set_config('g.t10', (now() - interval '10 minutes')::text, false);
 select set_config('g.b1', pg_temp.b(jsonb_build_array(
   pg_temp.ev('ZK001', '0101', current_setting('g.t30')::timestamptz, jsonb_build_object('record_seq', 50001, 'direction', 'in', 'verification', 'fingerprint', 'payload', jsonb_build_object('uid', '0101', 'verify', 1))),
@@ -128,8 +159,8 @@ select pg_temp.expect((select status = 'ok' and received = 5 and stored = 5 and 
 select pg_temp.expect((select last_seen_at is not null and last_successful_sync_at is not null and clock_drift_s = 12 from biometric_devices where id = current_setting('t.dev1')::uuid)
   and (select last_ingest_at is not null and version = '1.0.0' from biometric_agents where id = current_setting('t.agent')::uuid), 'device and agent telemetry updated');
 select pg_temp.expect((select count(*)::text from attendance_events) = current_setting('g.att'), 'nothing is written to attendance (projection is 0012)');
-select pg_temp.expect(not exists (select 1 from audit_log where target in ('biometric_agents', 'biometric_devices') and at >= now() - interval '1 minute' and action = 'update'
-  and before ->> 'id' in (current_setting('t.agent'), current_setting('t.dev1'))), 'telemetry updates are not written to the audit log');
+select pg_temp.expect((select count(*)::text from audit_log where target in ('biometric_agents', 'biometric_devices')) = current_setting('g.aud'),
+  'telemetry updates (agent and device) are not written to the audit log');
 select pg_temp.expect(not exists (select 1 from audit_log a where a.after::text like '%' || split_part(current_setting('g.k1'), '_', 3) || '%')
   and not exists (select 1 from biometric_sync_runs r where r.response::text like '%' || split_part(current_setting('g.k1'), '_', 3) || '%')
   and not exists (select 1 from biometric_event_errors e where e.detail::text like '%' || split_part(current_setting('g.k1'), '_', 3) || '%'),
@@ -234,6 +265,34 @@ select pg_temp.expect(not exists (select 1 from biometric_raw_events where raw_p
   'no template or image data is stored anywhere — not in raw events, not in error details');
 select pg_temp.expect((select 'unauthenticated_source' = any(flag_reasons) from biometric_event_state s join biometric_raw_events r on r.id = s.raw_event_id where r.record_seq = 52010),
   'review reason unauthenticated_source recorded');
+-- source_auth: decided by device configuration; the JSON can only lower it
+select pg_temp.act('anon');
+select set_config('g.sa', biometric_ingest(current_setting('g.k1'), pg_temp.b(jsonb_build_array(
+  pg_temp.ev('ZK001', '0101', now() - interval '90 minutes', '{"record_seq": 54001}'),
+  pg_temp.ev('ZK001', '0101', now() - interval '82 minutes', '{"record_seq": 54002, "source_auth": "authenticated"}'),
+  pg_temp.ev('ZK001', '0101', now() - interval '74 minutes', '{"record_seq": 54003, "source_auth": "unauthenticated_lan"}'),
+  pg_temp.ev('ZK001', '0101', now() - interval '66 minutes', '{"record_seq": 54004, "source_auth": "trusted"}'),
+  pg_temp.ev('PUSH01', '0101', now() - interval '58 minutes', '{"record_seq": 54005}'),
+  pg_temp.ev('PUSH01', '0101', now() - interval '50 minutes', '{"record_seq": 54006, "source_auth": "authenticated"}'))))::text, false);
+select set_config('g.sa2', biometric_ingest(current_setting('g.k2'), pg_temp.b(jsonb_build_array(
+  pg_temp.ev('ES002', '0101', now() - interval '42 minutes', '{"record_seq": 54007}'),
+  pg_temp.ev('ES002', '0101', now() - interval '34 minutes', '{"record_seq": 54008, "source_auth": "authenticated"}'))))::text, false);
+select pg_temp.act('owner');
+select pg_temp.expect((select string_agg(r.record_seq || '=' || r.source_auth || ':' || s.status || ':' || array_to_string(s.flag_reasons, '+'), ' ' order by r.record_seq)
+  from biometric_raw_events r join biometric_event_state s on s.raw_event_id = r.id where r.record_seq between 54001 and 54008 and r.agent_id in (current_setting('t.agent')::uuid, current_setting('t.agent2')::uuid))
+  = '54001=authenticated:stored: 54002=authenticated:stored: 54003=unauthenticated_lan:flagged:unauthenticated_source '
+    || '54005=unauthenticated_lan:unmatched:unauthenticated_source 54006=unauthenticated_lan:unmatched:unauthenticated_source+source_auth_claim_rejected '
+    || '54007=unauthenticated_lan:flagged:unauthenticated_source 54008=unauthenticated_lan:flagged:unauthenticated_source+source_auth_claim_rejected',
+  'omitted: decided by the device (key-protected → authenticated; open/push → unauthenticated_lan, flagged); forged "authenticated" on an open device → unauthenticated_lan, flagged, claim recorded as rejected; a weaker claim lowers it');
+select pg_temp.expect((current_setting('g.sa')::jsonb -> 'outcomes' -> 3 ->> 'reason') = 'unsupported_format', 'an unknown source_auth value is refused');
+select pg_temp.expect(not exists (select 1 from biometric_raw_events r join biometric_devices d on d.id = r.device_id
+  join biometric_sync_runs sr on sr.id = r.sync_run_id and sr.response is not null
+  where r.source_auth = 'authenticated' and not (d.device_auth = 'comm_key' and d.integration_method = 'sdk_pull')),
+  'no punch received through the gateway is marked authenticated unless its device is configured as key-protected SDK pull');
+select pg_temp.expect((select prosrc from pg_proc where proname = 'biometric_ingest') !~ 'if[^;]*biometric_client_ip' and
+  (select prosrc from pg_proc where proname = 'biometric_heartbeat') !~ 'if[^;]*biometric_client_ip',
+  'the client address is stored as telemetry only — no condition in the gateway uses it');
+
 -- inactive employee: the mapping stays (history), the punch goes to review
 update employees set active = false where id = current_setting('t.ea4')::uuid;
 select pg_temp.act('anon');
@@ -266,8 +325,9 @@ select pg_temp.expect((select count(*) from biometric_agents where id = current_
 select pg_temp.act('anon');
 select set_config('g.hb', biometric_heartbeat(current_setting('g.k1'), '{"agent_version":"1.0.1","devices":[{"manufacturer":"zkteco","serial":"ZK001","reachable":true,"clock_drift_s":7},{"manufacturer":"zkteco","serial":"ZK001X","reachable":true,"clock_drift_s":99}]}')::text, false);
 select pg_temp.act('owner');
-select pg_temp.expect((current_setting('g.hb')::jsonb ->> 'ok')::boolean and jsonb_array_length(current_setting('g.hb')::jsonb -> 'devices') = 1
-  and (current_setting('g.hb')::jsonb -> 'devices' -> 0 ->> 'serial') = 'ZK001' and (current_setting('g.hb')::jsonb -> 'devices' -> 0) ? 'connection',
+select pg_temp.expect((current_setting('g.hb')::jsonb ->> 'ok')::boolean
+  and (select string_agg(d ->> 'serial' || ':' || (d ->> 'device_auth'), ',' order by d ->> 'serial') from jsonb_array_elements(current_setting('g.hb')::jsonb -> 'devices') d) = 'PUSH01:none,ZK001:comm_key'
+  and (current_setting('g.hb')::jsonb -> 'devices' -> 1) ? 'connection',
   'heartbeat returns the agent''s own active devices with their non-secret connection details');
 select pg_temp.expect((select clock_drift_s = 7 from biometric_devices where id = current_setting('t.dev1')::uuid)
   and (select last_heartbeat_at is not null and version = '1.0.1' from biometric_agents where id = current_setting('t.agent')::uuid),

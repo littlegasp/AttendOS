@@ -24,7 +24,8 @@ fresh() {
           select jsonb_build_object('manufacturer', 'zkteco', 'serial', 'ZK001', 'employee_code', code, 'record_seq', seq,
                    'local_time', to_char(date_trunc('minute', now()) at time zone 'Asia/Kolkata' - make_interval(mins => mins_ago), 'YYYY-MM-DD HH24:MI:SS')) \$\$;
         grant execute on function public.gw_ev(text, int, bigint) to anon;
-        update biometric_agents set ingest_window_start = null, ingest_window_count = 0;" > /dev/null
+        update biometric_agents set ingest_window_start = null, ingest_window_count = 0;
+        update biometric_devices set device_auth = 'comm_key' where serial_number = 'ZK001' and integration_method = 'sdk_pull';" > /dev/null
   KEY=$( { echo "set role authenticated; select set_config('request.jwt.claim.sub', '$ADMIN', false);";
            echo "select biometric_rotate_agent_key(id) ->> 'agent_key' from biometric_agents where agent_identifier = 'office-pc-01';"; } | psql -X -q -At -d $1 | tail -1)
   DV=$(q $1 "select id from biometric_devices where serial_number = 'ZK001' and agent_id = (select id from biometric_agents where agent_identifier = 'office-pc-01')")

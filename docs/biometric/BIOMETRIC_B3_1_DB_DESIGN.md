@@ -1,6 +1,6 @@
 # Biometric B3.1 — database foundation audit and design
 
-Status: **revision 4 (20 Nov 2026)** — B3.2 approved for local development; **B3.3 gateway implemented locally (§13)**. Earlier: B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
+Status: **revision 5 (20 Nov 2026)** — B3.3 review corrections (§13.8). Revision 4 — B3.2 approved for local development; **B3.3 gateway implemented locally (§13)**. Earlier: B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
 `supabase/migrations/0010_biometric_core.sql` (§12). No SQL has been run against any Supabase project; no application
 code changed; no extension installed on any hosted project. Baseline: branch `feature/biometric-b1`, commit `d8146c9` (B2 approved). Starting point:
 BIOMETRIC_DATABASE_SCHEMA.md (B1 r2/r3). Every finding below was checked against the migrations 0001–0009, the test
@@ -553,9 +553,11 @@ Status: implemented and tested locally; **not run on any hosted project**. No at
 Event fields: `manufacturer`, `serial`, `employee_code` (exactly as the device shows it), `local_time` (device clock,
 `YYYY-MM-DD HH:MM[:SS]`), optional `utc_offset` (±HH:MM ≤ ±14:00), `direction` (in/out), `verification`, `event_id`,
 `record_seq`, `occurrence` (≥ 1, for identical records), `payload` (attendance record only, ≤ 4 KB, no templates or
-images), `source_auth` (`authenticated` / `unauthenticated_lan`). The device's zone is the one configured on the device.
+images), optional `source_auth` — a **claim that can only lower** the classification (§13.8). The device's zone is
+the one configured on the device.
 Other answers: `{"ok": false, "code": …}` — `not_accepted` (every key problem, identical), `use_post` (GET refused
-before the key is checked — a key must never be in a URL), `too_large`, `bad_request` (batch_id missing),
+before the key is checked — a key must never be in a URL), `too_large`, `bad_request` (events missing, null or not a
+list — checked null-safely with `IS DISTINCT FROM 'array'`; batch_id missing),
 `throttled` (+ `retry_after_s`), `processing_failure` (batch rolled back; resend it).
 
 ### 13.2 Order of work and limits
@@ -603,3 +605,24 @@ batch vs end-mapping, batch vs back-dated mapping, 40 parallel batches → exact
 `e2e/biometric_gateway_http.py` 13 over real HTTP (PostgREST 12.2.3): anon ingest, X-Forwarded-For address, replay,
 generic refusals, size cap, GET refused, heartbeat and throttle, the key absent from the PostgREST log, the Postgres
 server log, audit log, sync-run answers and error records.
+
+### 13.8 Revision 5 — what the gateway can and cannot prove (B3.3 review, 20 Nov 2026)
+| Fact | Proven? | How |
+|---|---|---|
+| Which **agent** sent a batch | **Yes** | agent key (256-bit; hash only; revocable) — unchanged |
+| That the agent may speak for the **device** named | **Yes** | device assigned to that agent by Admin; serial looked up only among the agent's own active devices |
+| That a punch was really produced by that **device** | **Only indirectly, and only for key-protected SDK-pull devices** | Admin sets `device_auth = comm_key` when the device refuses connections without its communication key (kept by the agent, never sent to AttendOS). A record the agent pulled from it implies the agent passed the device's own check. This is an Admin attestation plus the agent key — not a cryptographic signature on each punch. |
+| Anything about devices that push, open LAN pulls, vendor software | **No** | classified `unauthenticated_lan`, flagged `unauthenticated_source` for HR review |
+| Where the request came from (client IP) | **No** | `X-Forwarded-For` is caller-supplied (proxies may append, not overwrite). Stored as informational telemetry only (sync run `client_ip`, agent `last_ip`); never used for authentication, device authorisation or any accept/refuse decision. It could become a network identity only if a trusted proxy is configured to overwrite the header — not the case today. |
+Rules implemented in 0011:
+- `source_auth` is **computed**: `authenticated` only when the device is `sdk_pull` **and** `device_auth = comm_key`;
+  otherwise `unauthenticated_lan`. The event's JSON claim can only **lower** it: a forged `"authenticated"` from an
+  open/push device is ignored, the punch is `unauthenticated_lan`, flagged, and also marked
+  `source_auth_claim_rejected`; an `"unauthenticated_lan"` claim from a key-protected device is honoured (weaker);
+  any other value is refused (`unsupported_format`).
+- `device_auth` is set only by Admin (`biometric_set_device_auth`, the 13th signed-in function), audited, and refused
+  for non-pull devices by the function and by a table check.
+- The heartbeat tells the agent each device's `device_auth`, so the agent knows which devices need their key.
+Operational effect: until a device is declared key-protected, all of its punches go to HR review (the conservative
+default you set). Owner decision for B3.4/B5: whether HR may bulk-confirm a device's punches, or whether projection
+waits for `comm_key` devices only.

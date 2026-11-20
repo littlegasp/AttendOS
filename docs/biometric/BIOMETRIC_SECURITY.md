@@ -129,3 +129,7 @@ agent key is presented, accept POST only (a key must never be in a URL), and ans
 Keys are 256-bit from 0011 (244-bit for keys issued under 0010 until rotated), stored as SHA-256 only. Size caps and
 per-agent throttles apply; invalid-key floods are cheap to refuse and bounded by the anon statement timeout, with a
 Cloudflare Worker rate limiter documented as the gateway-level option. Details and tests: BIOMETRIC_B3_1_DB_DESIGN.md §13.
+Device authenticity (revision 5): the agent key proves the agent, not the device. A punch is `authenticated` only if
+its device is Admin-declared key-protected SDK pull (`device_auth = comm_key`); everything else is `unauthenticated_lan`
+and goes to review; the JSON claim can only lower this. `X-Forwarded-For` is untrusted telemetry and never decides
+access. See BIOMETRIC_B3_1_DB_DESIGN.md §13.8.

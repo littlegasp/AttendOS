@@ -33,8 +33,11 @@ key = db(f"""with k as (select * from biometric_new_key()),
 key, agent = key.split("|")
 loc = db(f"select id from locations where company_id = '{cid}' and active order by name limit 1")
 serial = "HTTP" + uuid.uuid4().hex[:6].upper()
-dev = db(f"""insert into biometric_devices (company_id, location_id, name, manufacturer, model, serial_number, integration_method, agent_id, timezone)
-  values ('{cid}', '{loc}', 'HTTP test door', 'zkteco', 'MB160', '{serial}', 'sdk_pull', '{agent}', (select timezone from companies where id = '{cid}')) returning id""")
+dev = db(f"""insert into biometric_devices (company_id, location_id, name, manufacturer, model, serial_number, integration_method, agent_id, timezone, device_auth)
+  values ('{cid}', '{loc}', 'HTTP test door', 'zkteco', 'MB160', '{serial}', 'sdk_pull', '{agent}', (select timezone from companies where id = '{cid}'), 'comm_key') returning id""")
+serial2 = "OPEN" + uuid.uuid4().hex[:6].upper()
+db(f"""insert into biometric_devices (company_id, location_id, name, manufacturer, model, serial_number, integration_method, agent_id, timezone)
+  values ('{cid}', '{loc}', 'HTTP open reader', 'zkteco', 'K40', '{serial2}', 'sdk_pull', '{agent}', (select timezone from companies where id = '{cid}'))""")
 emp = db(f"select id from employees where company_id = '{cid}' and active order by email limit 1")
 db(f"insert into biometric_employee_mappings (company_id, device_id, employee_id, employee_device_code, valid_from) values ('{cid}', '{dev}', '{emp}', '0101', now() - interval '7 days')")
 tz = db(f"select timezone from companies where id = '{cid}'")
@@ -75,9 +78,34 @@ try:
 except urllib.error.HTTPError as e: hbody = {"code": f"http {e.code}"}
 check(hbody.get("code") in ("use_post",) or hbody.get("code", "").startswith("http"), f"the same for heartbeat ({hbody})")
 
+# ------------------------------------------------------------ malformed events (null-safe), device authentication, client address trust
+before = db("select (select count(*) from biometric_sync_runs) || '/' || (select count(*) from biometric_raw_events) || '/' || (select count(*) from biometric_event_errors)")
+answers = [post("biometric_ingest", {"p_key": key, "p_batch": b})[1].get("code") for b in
+           [{"batch_id": str(uuid.uuid4())}, {"batch_id": str(uuid.uuid4()), "events": None}, {"batch_id": str(uuid.uuid4()), "events": {}},
+            {"batch_id": str(uuid.uuid4()), "events": "x"}]]
+after = db("select (select count(*) from biometric_sync_runs) || '/' || (select count(*) from biometric_raw_events) || '/' || (select count(*) from biometric_event_errors)")
+check(answers == ["bad_request"] * 4 and before == after, f"events missing / null / object / string over HTTP: bad_request each, nothing stored ({answers}, counts {before} -> {after})")
+st7, r7 = post("biometric_ingest", {"p_key": key, "p_batch": {"batch_id": str(uuid.uuid4()), "events": [
+    {"manufacturer": "zkteco", "serial": serial, "employee_code": "0101", "local_time": local(90), "record_seq": 11},
+    {"manufacturer": "zkteco", "serial": serial2, "employee_code": "0101", "local_time": local(80), "record_seq": 12},
+    {"manufacturer": "zkteco", "serial": serial2, "employee_code": "0101", "local_time": local(70), "record_seq": 13, "source_auth": "authenticated"}]}})
+cls = db(f"select string_agg(r.source_auth || ':' || array_to_string(s.flag_reasons, '+'), ',' order by r.record_seq) from biometric_raw_events r join biometric_event_state s on s.raw_event_id = r.id where r.agent_id = '{agent}' and r.record_seq in (11, 12, 13)")
+check(cls == "authenticated:,unauthenticated_lan:unauthenticated_source,unauthenticated_lan:unauthenticated_source+source_auth_claim_rejected",
+      f"source_auth decided by device configuration over HTTP; a forged 'authenticated' on an open reader is lowered and flagged ({cls})")
+spoof = post("biometric_ingest", {"p_key": "bak_x", "p_batch": {"batch_id": str(uuid.uuid4()), "events": []}}, headers={"X-Forwarded-For": "10.0.0.5"})[1]
+check(spoof == {"ok": False, "code": "not_accepted", "message": "Not accepted."}, "a 'trusted-looking' X-Forwarded-For address does not help a wrong key")
+bid = str(uuid.uuid4())
+post("biometric_ingest", {"p_key": key, "p_batch": {"batch_id": bid, "events": []}}, headers={"X-Forwarded-For": "198.51.100.9, 10.0.0.1"})
+bid2 = str(uuid.uuid4())
+r9 = post("biometric_ingest", {"p_key": key, "p_batch": {"batch_id": bid2, "events": []}}, headers={"X-Forwarded-For": "not-an-address"})[1]
+ips = db(f"select coalesce(host(client_ip), 'null') from biometric_sync_runs where batch_id in ('{bid}', '{bid2}') order by started_at")
+check(r9.get("ok") is True and ips.split() == ["198.51.100.9", "null"], f"the header is only recorded (first entry; junk -> nothing) and never decides acceptance ({ips.split()})")
+anon_fns = db("select string_agg(p.proname, ',' order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and has_function_privilege('anon', p.oid, 'execute')")
+check(anon_fns == "biometric_heartbeat,biometric_ingest,company_brand", f"anonymous callers can execute exactly: {anon_fns}")
+
 # ------------------------------------------------------------ heartbeat
 st4, h = post("biometric_heartbeat", {"p_key": key, "p_status": {"agent_version": "0.1.0-http", "devices": [{"manufacturer": "zkteco", "serial": serial, "reachable": True, "clock_drift_s": 6}]}})
-check(st4 == 200 and h["ok"] and [d["serial"] for d in h["devices"]] == [serial], "heartbeat over HTTP returns the agent's device list")
+check(st4 == 200 and h["ok"] and sorted(d["serial"] for d in h["devices"]) == sorted([serial, serial2]), "heartbeat over HTTP returns the agent's device list")
 st5, h2 = post("biometric_heartbeat", {"p_key": key, "p_status": {}})
 check(h2.get("code") == "throttled", "a second heartbeat within 30 s is throttled")
 st6, h3 = post("biometric_heartbeat", {"p_key": "bak_x", "p_status": {}})
