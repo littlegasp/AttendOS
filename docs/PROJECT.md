@@ -297,4 +297,10 @@ B3.2 approved for local development (20 Nov 2026; not for hosted). B3.3 (20 Nov 
 written and tested locally — anon biometric_ingest/biometric_heartbeat (key in body, POST only, generic refusals, size
 caps, replay, dedupe, timestamp validation, ownership, throttle, shared code locks); no attendance projection.
 Not run on any hosted project. Future migrations start at 0012. Awaiting owner review before B3.4 (projection).
+B3.3 approved for local development (20 Nov 2026; B3.3 report r5.1 corrects the test figures to 633/79/18, no code
+changed). B3.4 (20 Nov 2026): **design only** for migration 0012 (attendance projection) —
+docs/biometric/BIOMETRIC_B3_4_PROJECTION_DESIGN.md: per employee-day projection by a pg_cron procedure under the
+punch lock (7), stable slot rows with raw-punch links, provisional check-out kept off the register until day close,
+gate/holds/review routing, correction lock wrapper, Biometric/Imported labels. Nothing implemented; no existing
+function changed. Awaiting owner review and answers to Q1–Q10 before 0012 is written.
 
