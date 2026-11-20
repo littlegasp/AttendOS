@@ -69,8 +69,28 @@ selected tab is scrolled fully into view without moving the page; `overflow-y: h
 scrolling over it scrolls the page (it previously captured a 1-pixel vertical scroll). Long names wrap (`.bio-wrap`);
 device names are limited to 60 characters.
 
+## Final verification for sign-off (20 Nov 2026)
+Defects found by the verification and fixed (logic only, no visual redesign):
+- A back-dated **End mapping** or a back-dated **new mapping** could silently move a punch that had already been
+  processed (attributed, reviewed or dismissed) to a different person. Both are now blocked before saving
+  (`reassignedPunches`, `endMappingConflicts`) with the reason and the latest affected device time; the reducer enforces
+  the same rule. Only open *unmatched* punches are picked up by a new mapping (that is their purpose).
+- A decision on a review item that no longer exists returned silently; it now refuses with a message.
+- `pgrst.log` (a local PostgREST error log, no data) was committed by mistake in `36fb13a`; removed and ignored.
+
+Sign-off script `e2e/biometric_b2_signoff.py`: role matrix observed in the interface for each role, a full Admin
+session with every action while recording every network request, every public table fingerprinted (row count + content
+hash) before and after, and a 1440 / 820 / 390 px × light / dark matrix (tabs, device detail, three dialogs,
+dropdowns, vertical scroll, empty module).
+
+**What enforces permissions in B2.** The demonstration reducer (`assertAllowed`) refuses every action for a role
+without the capability, and the unit tests prove it. This runs in the browser, so it is application-logic
+enforcement, not security: B2 has no server actions to protect because nothing is saved. From B3 the same capabilities
+must be enforced by the database functions (BIOMETRIC_SECURITY.md §5).
+
 ## Tests
-- `tests/biometric.test.ts` (13): menu and permission matrix; the reducer refusing every action for Manager/Employee
+- `tests/biometric.test.ts` (17; 4 sign-off tests added: no silent reassignment of processed punches, effective
+  dates, repeated/invalid actions and no state mutation, every decision × role with actor/role/time/reason): menu and permission matrix; the reducer refusing every action for Manager/Employee
   and device configuration / company-wide codes for HR; device-specific codes; attribution by punch time (re-used code
   107); device-over-company-wide precedence with effective dates; conflict blocks and notices; company-wide
   confirmation; mapping resolving only covered punches with the raw record unchanged; review decisions (valid set,

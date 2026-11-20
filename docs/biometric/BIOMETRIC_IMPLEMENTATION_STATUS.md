@@ -6,7 +6,7 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 | Phase | Scope | Status |
 |---|---|---|
 | **B1** Architecture & database design | Audit, architecture, schema & migration plan, adapter contract, agent design, security, hardware research, test plan | **Revision 3 written (owner clarifications applied) — awaiting final B1 approval.** No migration, function, UI or agent code. |
-| B2 Device management UI | Overview, devices, add-device wizard, device detail, mapping, sync activity, review queue — on mock data | **Implemented; review corrections applied; locally tested with mock data** (BIOMETRIC_B2_DEVICE_UI.md). No backend, no hardware. Awaiting owner review. |
+| B2 Device management UI | Overview, devices, add-device wizard, device detail, mapping, sync activity, review queue — on mock data | **Implemented; review corrections and final verification done; locally tested with mock data** (BIOMETRIC_B2_DEVICE_UI.md). No backend, no hardware. Awaiting owner review. |
 | B3 Gateway | `biometric_ingest`, heartbeat, keys, normalisation, idempotency, errors | Not yet implemented |
 | B4 Sync Agent | Service, queue, uploader, heartbeat, mock adapter | Not yet implemented |
 | B5 First real adapter | On the hardware chosen in D9 | Not yet implemented — needs hardware |
@@ -16,7 +16,7 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 
 | Item | Implemented | Locally tested | Mock tested | Real hardware | Hosted |
 |---|---|---|---|---|---|
-| B2 screens (demonstration data) | Yes | Yes (48 app, 101 browser, 360 DB, 29 regression) | Yes — UI only, mock state | No | No |
+| B2 screens (demonstration data) | Yes | Yes (52 app, 101 + 56 sign-off browser, 360 DB, 29 regression) | Yes — UI only, mock state | No | No |
 | Gateway, agent, adapters, projection | No | No | No | No | No |
 
 Unchanged by B1: application commit `6d47386`, all migrations 0001–0009, the Pilot 01 pack. Nothing deployed,

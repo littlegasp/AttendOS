@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  assertAllowed, DECISION, DECISIONS_FOR, DemoRuleError, emptyState, mappingConflicts, PREVIEW_OFFICES, PREVIEW_PEOPLE, reducer, resolveMapping, reviewEmployee, seed,
+  assertAllowed, endMappingConflicts, reassignedPunches, DECISION, DECISIONS_FOR, DemoRuleError, emptyState, mappingConflicts, PREVIEW_OFFICES, PREVIEW_PEOPLE, reducer, resolveMapping, reviewEmployee, seed,
   type Action, type DemoState,
 } from "../src/lib/biometric-mock";
 import { navFor } from "../src/lib/nav";
@@ -208,4 +208,79 @@ test("the biometric module makes no database writes and no device connections", 
   }
   const rpcs = [...page.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]);
   assert.deepEqual(rpcs, ["people_directory"], "only the read-only people list");
+});
+
+test("sign-off: processed punches are never silently reassigned by a mapping change", () => {
+  const s = fresh();
+  const dup = s.reviews.find((r) => r.raw.code === "105" && r.status === "open")!; // processed (attributed) punch
+  const m105 = reviewEmployee(s, dup)!;
+  const beforePunch = new Date(Date.parse(dup.raw.punchAt) - 60_000).toISOString();
+  assert.match(endMappingConflicts(s, m105.id, beforePunch)[0]!.text, /already processed punch/);
+  assert.throws(() => run(s, { type: "endMapping", mappingId: m105.id, at: beforePunch, reason: "Back-dated end", ...as("admin") }), /already processed/);
+  assert.deepEqual(endMappingConflicts(s, m105.id, nowIso), [], "ending after the punch is fine");
+  const s2 = run(s, { type: "endMapping", mappingId: m105.id, at: nowIso, reason: "Left today", ...as("hr") });
+  assert.equal(reviewEmployee(s2, s2.reviews.find((r) => r.id === dup.id)!)!.employeeId, m105.employeeId, "still the same person");
+  // A dismissed unmatched punch is processed too: a back-dated mapping may not pick it up.
+  const un = s.reviews.find((r) => r.raw.code === "117")!;
+  const s3 = run(s, { type: "review", reviewId: un.id, decision: "dismiss", note: "Visitor test punch", ...as("hr") });
+  assert.throws(() => run(s3, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: un.raw.punchAt, ...as("hr") }), /already processed/);
+  const s4 = run(s3, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso, ...as("hr") });
+  assert.equal(s4.reviews.find((r) => r.id === un.id)!.status, "dismissed");
+  assert.equal(reviewEmployee(s4, s4.reviews.find((r) => r.id === un.id)!), null);
+  // Company-wide added back-dated over a processed punch on a device without its own mapping is blocked too.
+  const s5 = run(s, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: un.raw.punchAt, ...as("hr") });
+  assert.equal(reassignedPunches(s5, s5.mappings).length, 0);
+});
+
+test("sign-off: effective dates — a mapping starting later does not cover earlier punches", () => {
+  const s = fresh();
+  const un = s.reviews.find((r) => r.raw.code === "205")!;
+  const later = new Date(Date.parse(un.raw.punchAt) + 60_000).toISOString();
+  const s2 = run(s, { type: "addMapping", code: "205", deviceId: "dev-3", employeeId: active[9]!.id, validFrom: later, ...as("hr") });
+  assert.equal(s2.reviews.find((r) => r.id === un.id)!.status, "open");
+  assert.equal(resolveMapping(s2, "dev-3", "205", un.raw.punchAt), null);
+  assert.equal(resolveMapping(s2, "dev-3", "205", nowIso)!.employeeId, active[9]!.id);
+});
+
+test("sign-off: repeated or invalid actions leave state consistent and never mutate it", () => {
+  const s = fresh();
+  const snap = structuredClone(s);
+  const dup = s.reviews.find((r) => r.status === "open" && r.kind === "possible_duplicate")!;
+  const s2 = run(s, { type: "review", reviewId: dup.id, decision: "confirm_duplicate", note: "", ...as("hr") });
+  assert.deepEqual(s, snap, "reducer never mutates the previous state");
+  for (const d of ["confirm_duplicate", "not_duplicate", "dismiss"] as const) {
+    assert.throws(() => run(s2, { type: "review", reviewId: dup.id, decision: d, note: "Second decision", ...as("admin") }), /already been decided/);
+  }
+  assert.equal(s2.reviews.find((r) => r.id === dup.id)!.history.length, dup.history.length + 1, "exactly one decision recorded");
+  // Mapping twice: the second is an overlap.
+  const un = s.reviews.find((r) => r.raw.code === "117")!;
+  const m1 = run(s, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: un.raw.punchAt, ...as("hr") });
+  assert.throws(() => run(m1, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: un.raw.punchAt, ...as("hr") }), /already mapped/);
+  // A punch resolved by mapping cannot then be dismissed.
+  assert.throws(() => run(m1, { type: "review", reviewId: un.id, decision: "dismiss", note: "Too late now", ...as("hr") }), /already been decided/);
+  // Ending twice.
+  const m = m1.mappings.at(-1)!;
+  const e1 = run(m1, { type: "endMapping", mappingId: m.id, at: nowIso, reason: "First end", ...as("hr") });
+  assert.throws(() => run(e1, { type: "endMapping", mappingId: m.id, at: nowIso, reason: "Second end", ...as("hr") }), /already ended/);
+  assert.throws(() => run(s, { type: "review", reviewId: "missing", decision: "dismiss", note: "Not there", ...as("hr") }));
+});
+
+test("sign-off: every review decision is Admin/HR only and records actor, role, time and reason", () => {
+  const s = fresh();
+  for (const r of s.reviews.filter((x) => x.status === "open")) {
+    for (const d of DECISIONS_FOR[r.kind]) {
+      const note = "Checked against the gate log";
+      for (const role of ["manager", "employee"] as Role[]) assert.throws(() => run(s, { type: "review", reviewId: r.id, decision: d, note, ...as(role) }), /cannot make review decisions/);
+      for (const role of ["admin", "hr"] as Role[]) {
+        const after = run(s, { type: "review", reviewId: r.id, decision: d, note, ...as(role) }).reviews.find((x) => x.id === r.id)!;
+        const h = after.history.at(-1)!;
+        assert.equal(h.action, DECISION[d].label);
+        assert.equal(h.note, note);
+        assert.equal(h.at, nowIso);
+        assert.equal(h.by, `Test ${role} · ${role === "hr" ? "HR" : "Admin"}`);
+        assert.deepEqual(after.raw, r.raw);
+        assert.equal(after.status, d === "dismiss" ? "dismissed" : "resolved");
+      }
+    }
+  }
 });

@@ -282,6 +282,9 @@ export function mappingConflicts(s: DemoState, people: Person[], m: MappingDraft
       out.push({ level: "block", text: `${person!.full_name} already has code ${x.code} on ${dev(x.deviceId)} for this period. One person has one code per device at a time.` });
     }
   }
+  const draft: Mapping = { id: "__draft__", code, deviceId: m.deviceId, employeeId: m.employeeId, validFrom: m.validFrom, validTo: null, createdBy: "", createdAt: "" };
+  const moved = reassignedPunches(s, [...s.mappings, draft]);
+  if (moved.length) out.push(reassignBlock(moved));
   if (m.deviceId !== null) {
     const cw = s.mappings.find((x) => x.deviceId === null && x.code === code && overlaps(x, win));
     if (cw && cw.employeeId !== m.employeeId) out.push({ level: "notice", text: `A company-wide mapping sends code ${code} to ${name(cw.employeeId)}. On ${dev(m.deviceId)} this device mapping will take precedence.` });
@@ -296,6 +299,37 @@ export function mappingConflicts(s: DemoState, people: Person[], m: MappingDraft
   if (covered.length) out.push({ level: "notice", text: `${covered.length} waiting punch${covered.length === 1 ? "" : "es"} with this code will be attributed to ${person!.full_name} at the original time.` });
   if (before) out.push({ level: "notice", text: `${before} waiting punch${before === 1 ? " is" : "es are"} earlier than the effective date and will stay unmatched.` });
   return out;
+}
+
+/* ------------------------------------------------------------------ processed punches are never silently reassigned */
+
+/** Punches already processed: every review item except an open unmatched one (those are waiting for a mapping). */
+function processed(r: ReviewItem): boolean {
+  return !(r.status === "open" && r.kind === "unmatched");
+}
+
+/** Processed punches whose employee would change if the mappings were replaced by `next`. */
+export function reassignedPunches(s: DemoState, next: Mapping[]): ReviewItem[] {
+  const after: DemoState = { ...s, mappings: next };
+  return s.reviews.filter((r) => processed(r) && resolveMapping(s, r.raw.deviceId, r.raw.code, r.raw.punchAt)?.id !== resolveMapping(after, r.raw.deviceId, r.raw.code, r.raw.punchAt)?.id);
+}
+
+function reassignBlock(items: ReviewItem[]): Conflict {
+  const last = [...items].sort((a, b) => b.raw.punchAt.localeCompare(a.raw.punchAt))[0]!;
+  return {
+    level: "block",
+    text: `This would move ${items.length} already processed punch${items.length === 1 ? "" : "es"} to a different person (latest: device time ${last.raw.deviceLocalTime}). Choose an effective time after it — processed punches keep the mapping they were processed with; correcting them is a separate HR correction.`,
+  };
+}
+
+/** Problems with ending a mapping at `at`, shown before saving and enforced by the reducer. */
+export function endMappingConflicts(s: DemoState, mappingId: string, at: string): Conflict[] {
+  const m = s.mappings.find((x) => x.id === mappingId);
+  if (!m) return [{ level: "block", text: "This mapping no longer exists." }];
+  if (m.validTo) return [{ level: "block", text: "This mapping has already ended." }];
+  if (!at || Number.isNaN(Date.parse(at)) || at <= m.validFrom) return [{ level: "block", text: "The end must be after the mapping started." }];
+  const moved = reassignedPunches(s, s.mappings.map((x) => (x.id === mappingId ? { ...x, validTo: at } : x)));
+  return moved.length ? [reassignBlock(moved)] : [];
 }
 
 /* ------------------------------------------------------------------ actions */
@@ -352,11 +386,11 @@ export function reducer(people: Person[], now: () => string = () => new Date().t
       }
       case "endMapping": {
         const m = s.mappings.find((x) => x.id === a.mappingId);
-        if (!m) return s;
-        if (m.validTo) throw new DemoRuleError("This mapping has already ended.");
-        if (a.reason.trim().length < 5) throw new DemoRuleError("Give a reason (at least 5 characters).");
-        if (Number.isNaN(Date.parse(a.at)) || a.at <= m.validFrom) throw new DemoRuleError("The end must be after the mapping started.");
+        if (!m) throw new DemoRuleError("This mapping no longer exists.");
         if (m.deviceId === null && !can(a.role, "mapBiometricCompanyWide")) throw new DemoRuleError("Company-wide mappings are an Admin decision.");
+        if (a.reason.trim().length < 5) throw new DemoRuleError("Give a reason (at least 5 characters).");
+        const problem = endMappingConflicts(s, a.mappingId, a.at)[0];
+        if (problem) throw new DemoRuleError(problem.text);
         const person = people.find((p) => p.id === m.employeeId);
         return {
           ...s,
@@ -366,7 +400,7 @@ export function reducer(people: Person[], now: () => string = () => new Date().t
       }
       case "review": {
         const r = s.reviews.find((x) => x.id === a.reviewId);
-        if (!r) return s;
+        if (!r) throw new DemoRuleError("This review item no longer exists.");
         if (r.status !== "open") throw new DemoRuleError("This item has already been decided.");
         if (!DECISIONS_FOR[r.kind].includes(a.decision)) throw new DemoRuleError("That decision does not apply to this kind of item.");
         const d = DECISION[a.decision];

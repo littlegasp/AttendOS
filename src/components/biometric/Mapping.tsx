@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { EmptyState } from "@/components/States";
 import { Button, FormInput, FormSelect, FormTextarea, GlassCard, SectionCard, StatusBadge } from "@/components/ui";
-import { isoToZoned, type Mapping, mappingConflicts, resolveMapping, zonedToIso } from "@/lib/biometric-mock";
+import { endMappingConflicts, isoToZoned, type Mapping, mappingConflicts, resolveMapping, zonedToIso } from "@/lib/biometric-mock";
 import { toast } from "@/lib/toast";
 import { DemoNote, fmtTime, useDemo } from "./shared";
 
@@ -62,6 +62,7 @@ function EndMappingDialog({ m, onClose }: { m: Mapping; onClose: () => void }) {
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const p = people.find((x) => x.id === m.employeeId);
+  const blocks = endMappingConflicts(state, m.id, zonedToIso(at, tz));
   return (
     <Modal open title={`End mapping of code ${m.code}`} subtitle={`${p?.full_name ?? "Former employee"} · ${scopeName(m.deviceId, state.devices)}`} onClose={onClose}>
       <form
@@ -77,11 +78,12 @@ function EndMappingDialog({ m, onClose }: { m: Mapping; onClose: () => void }) {
         <p className="small">Punches recorded before the end keep belonging to {p?.full_name ?? "this person"}. Punches after it with code {m.code} become unmatched until the code is mapped again.</p>
         <FormInput label={`Ends at (${tz})`} type="datetime-local" required value={at} onChange={(e) => setAt(e.target.value)} />
         <FormTextarea label="Reason" required rows={2} value={reason} onChange={(e) => setReason(e.target.value)} helper="Kept in the mapping history." />
-        {error ? <div className="alert danger" role="alert"><p>{error}</p></div> : null}
+        {blocks.map((c, i) => <div key={i} className="alert danger" role="alert"><p>{c.text}</p></div>)}
+        {error && !blocks.some((c) => c.text === error) ? <div className="alert danger" role="alert"><p>{error}</p></div> : null}
         <DemoNote />
         <div className="dialog-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="danger">End mapping</Button>
+          <Button type="submit" variant="danger" disabled={blocks.length > 0}>End mapping</Button>
         </div>
       </form>
     </Modal>
