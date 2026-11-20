@@ -306,5 +306,7 @@ function changed. Revision 2 (20 Nov 2026, owner review): HR acceptance never by
 `correction_needed`, reachable only through an approved correction), source-value preflight that stops 0012 without
 changes, provisional time shown separately from final hours, explicit device-direction transition rules and tests,
 owner decisions Q1–Q10 applied (pg_cron later under separate approval; per-punch acceptance; CSV Source column; Admin
-shift-gap warning). Still design only; awaiting final approval before 0012 is written.
+shift-gap warning). Revision 3 (20 Nov 2026): held punches re-evaluated at any age on a backoff in a separate
+bounded queue budget; a hold released after the 2-day window needs a new individual HR acceptance; company-local dates;
+null-safe authentication gate. Still design only; awaiting final approval before 0012 is written.
 
