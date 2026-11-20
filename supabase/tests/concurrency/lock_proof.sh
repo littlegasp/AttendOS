@@ -1,6 +1,7 @@
 #!/bin/sh
 # Concurrency proofs on throwaway copies of the test database (run after supabase/tests/run.sh).
 #  1-2: 0010 mapping and review races (as migrated).
+#  7-9: mapping changes vs punch processing — lock key 41 protocol for 0011/0012, with controls that skip a lock.
 #  3-5: correction locking — the PROPOSED 0012 wrapper (proposed_correction_lock.sql) against a simulated projection
 #       that takes lock 7 like the real one will; each scenario runs on a fresh copy, with and without the wrapper.
 # Usage: PGHOST=/tmp/pg PGPORT=5433 PGUSER=postgres sh supabase/tests/concurrency/lock_proof.sh
@@ -123,6 +124,109 @@ sleep 0.5
 OUT=$(q $DB "select proof_project_in('$PE', $T, now(), false)"); wait
 N=$(ins_count $DB "$T")
 [ "$N" = 2 ] && ok "control: a projection that skipped lock 7 would duplicate the check-in (2 rows) — so 0012 must take it" || bad "control expected 2, got $N"
+
+# ------------------------------------------------------------ 7-9. mapping changes vs punch processing (lock key 41)
+# Invariant checked after every scenario: no processed punch is attributed to a mapping that does not cover it, and no
+# processed punch would resolve to a different mapping than the one it carries (biometric_reassigned_count = 0).
+invariant() {
+  q $1 "select (select count(*) from biometric_event_state s join biometric_raw_events r on r.id = s.raw_event_id join biometric_employee_mappings m on m.id = s.mapping_id
+                 where r.punch_at < m.valid_from or (m.valid_to is not null and r.punch_at >= m.valid_to))
+              + (select coalesce(sum((biometric_reassigned_count(c.company_id, c.code)).n), 0) from (select distinct company_id, employee_device_code code from biometric_raw_events) c)"
+}
+# stand-in for the 0011 ingestion protocol: shared code locks (ascending key order), resolve, store raw + state, hold, commit
+add_ingest() {
+  q $1 "create function public.proof_ingest(p_agent uuid, p_dev uuid, p_codes text[], p_at timestamptz, p_seq bigint, use_lock boolean, hold_s float) returns text language plpgsql as \$\$
+  declare cid uuid; c text; mid uuid; rid bigint; t timestamptz := date_trunc('second', p_at);
+  begin
+    select company_id into cid from biometric_devices where id = p_dev;
+    if use_lock then perform pg_advisory_xact_lock_shared(k) from (select distinct biometric_code_lock_key(cid, x) k from unnest(p_codes) x order by 1) z; end if;
+    foreach c in array p_codes loop
+      mid := biometric_resolve_mapping(cid, p_dev, c, t);
+      insert into biometric_raw_events (company_id, device_id, agent_id, employee_device_code, device_local_time, device_timezone, punch_at, source_auth, dedupe_key, dedupe_basis)
+        values (cid, p_dev, p_agent, c, to_char(t at time zone 'Asia/Kolkata', 'YYYY-MM-DD HH24:MI:SS'), 'Asia/Kolkata', t, 'authenticated', 'seq:' || p_seq, 'record_seq') returning id into rid;
+      insert into biometric_event_state (raw_event_id, company_id, employee_id, mapping_id, status)
+        values (rid, cid, (select employee_id from biometric_employee_mappings where id = mid), mid, case when mid is null then 'unmatched' else 'stored' end);
+      p_seq := p_seq + 1;
+    end loop;
+    perform pg_sleep(hold_s);
+    return 'stored ' || array_length(p_codes, 1);
+  end \$\$;" > /dev/null
+}
+ctx() { # device ZK001 of company A, its agent, two active people without codes on it
+  AG=$(q $1 "select id from biometric_agents where agent_identifier = 'office-pc-01'")
+  DV=$(q $1 "select id from biometric_devices where serial_number = 'ZK001' and agent_id = '$AG'")
+  P1=$(q $1 "select e.id from employees e where e.company_id = (select company_id from biometric_devices where id = '$DV') and e.active and not exists (select 1 from biometric_employee_mappings m where m.employee_id = e.id and m.device_id = '$DV') order by e.email limit 1")
+  P2=$(q $1 "select e.id from employees e where e.company_id = (select company_id from biometric_devices where id = '$DV') and e.active and not exists (select 1 from biometric_employee_mappings m where m.employee_id = e.id and m.device_id = '$DV') order by e.email offset 1 limit 1")
+}
+hr() { { as_user $HR; echo "$2"; } | psql -X -q -At -d $1 2>&1; }
+
+for MODE in protocol nolock; do
+  # 7. ingestion of a punch at T-10min while HR ends the mapping at T-20min
+  DB=bio_map_ingest_$MODE; fresh $DB; add_ingest $DB; ctx $DB
+  M=$(hr $DB "select biometric_save_mapping('ING1', '$DV', '$P1', now() - interval '1 day') ->> 'mapping_id';" | tail -1)
+  L=$([ $MODE = protocol ] && echo true || echo false)
+  ( q $DB "select proof_ingest('$AG', '$DV', array['ING1'], now() - interval '10 minutes', 5001, $L, 2)" > /tmp/ing_$MODE.txt 2>&1 ) &
+  sleep 0.5; START=$(date +%s.%N)
+  R=$(hr $DB "select biometric_end_mapping('$M', now() - interval '20 minutes', 'Left the company') ->> 'message';" | tail -1)
+  WAIT=$(echo "$(date +%s.%N) - $START" | bc); wait
+  INV=$(invariant $DB); ENDED=$(q $DB "select valid_to is not null from biometric_employee_mappings where id = '$M'")
+  echo "   [$MODE] ingest vs end-mapping: end waited ${WAIT}s -> '${R:-ok}'; mapping ended: $ENDED; invariant violations: $INV"
+  if [ $MODE = protocol ]; then
+    case "$R" in *"already processed"*) [ "$INV" = 0 ] && [ "$ENDED" = f ] && [ "$(echo "$WAIT > 1.0" | bc)" = 1 ] && ok "ingestion holding the shared code lock: end-mapping waited, then saw the new punch and refused; attribution consistent" || bad "protocol ingest inv=$INV ended=$ENDED";; *) bad "protocol ingest: '$R'";; esac
+  else
+    [ "$INV" != 0 ] && ok "control: ingestion WITHOUT the code lock lets end-mapping commit under an in-flight punch -> $INV violation(s) (so 0011 must take the lock)" || bad "control expected a violation"
+  fi
+
+  # 8. HR dismisses a waiting unmatched punch while another HR saves a back-dated mapping covering it — both orders
+  DB=bio_map_review_$MODE; fresh $DB; add_ingest $DB; ctx $DB
+  if [ $MODE = nolock ]; then # control: the review function without its shared code lock
+    q $DB "do \$d\$ begin execute replace(pg_get_functiondef('biometric_review_event(bigint,text,text,int)'::regprocedure),
+            'perform pg_advisory_xact_lock_shared(public.biometric_code_lock_key(cid, code));', ''); end \$d\$" > /dev/null
+  fi
+  q $DB "select proof_ingest('$AG', '$DV', array['REV1'], now() - interval '2 hours', 6001, true, 0)" > /dev/null
+  X=$(q $DB "select id from biometric_raw_events where dedupe_key = 'seq:6001'")
+  ( hr $DB "begin; select biometric_review_event($X, 'dismiss', 'Visitor test punch', 1) ->> 'ok'; select pg_sleep(2); commit;" > /tmp/rev_$MODE.txt ) &
+  sleep 0.5; START=$(date +%s.%N)
+  R=$(hr $DB "select coalesce(biometric_save_mapping('REV1', '$DV', '$P2', now() - interval '3 hours') ->> 'message', 'saved');" | tail -1)
+  WAIT=$(echo "$(date +%s.%N) - $START" | bc); wait
+  INV=$(invariant $DB); ST=$(q $DB "select status || '/' || coalesce(mapping_id::text, 'none') from biometric_event_state where raw_event_id = $X")
+  echo "   [$MODE] dismiss-first vs back-dated mapping: mapping waited ${WAIT}s -> '$R'; punch: $ST; invariant violations: $INV"
+  if [ $MODE = protocol ]; then
+    case "$R" in *"already processed"*) [ "$INV" = 0 ] && [ "$(echo "$WAIT > 1.0" | bc)" = 1 ] && ok "review first: the mapping waited for the dismissal, then refused to move the processed punch" || bad "review-first inv=$INV";; *) bad "review-first: '$R'";; esac
+  else
+    [ "$INV" != 0 ] && ok "control: without the review's shared code lock the back-dated mapping slips past the dismissal -> $INV violation(s)" || bad "review control expected a violation ($R)"
+  fi
+  if [ $MODE = protocol ]; then
+    q $DB "select proof_ingest('$AG', '$DV', array['REV2'], now() - interval '2 hours', 6002, true, 0)" > /dev/null
+    Y=$(q $DB "select id from biometric_raw_events where dedupe_key = 'seq:6002'")
+    ( hr $DB "begin; select biometric_save_mapping('REV2', '$DV', '$P1', now() - interval '3 hours') ->> 'attributed'; select pg_sleep(2); commit;" > /tmp/map_first.txt ) &
+    sleep 0.5; START=$(date +%s.%N)
+    R=$( { as_user $ADMIN; echo "select biometric_review_event($Y, 'dismiss', 'Visitor test punch', 1) ->> 'message';"; } | psql -X -q -At -d $DB 2>&1 | tail -1)
+    WAIT=$(echo "$(date +%s.%N) - $START" | bc); wait
+    INV=$(invariant $DB); ST=$(q $DB "select status || '/' || (mapping_id is not null) from biometric_event_state where raw_event_id = $Y")
+    echo "   [$MODE] mapping-first vs dismissal: review waited ${WAIT}s -> '$R'; punch: $ST; invariant violations: $INV"
+    case "$R" in *"does not apply"*|*"changed since"*) [ "$INV" = 0 ] && [ "$ST" = "stored/true" ] && [ "$(echo "$WAIT > 1.0" | bc)" = 1 ] && ok "mapping first: the dismissal waited, then saw the punch attributed and did not act on stale data" || bad "mapping-first inv=$INV st=$ST";; *) bad "mapping-first: '$R'";; esac
+  fi
+done
+
+# 9. no deadlock: one ingestion batch over two codes (A, B) in parallel with a mapping change on B and a review on A,
+#    repeated 5 times; every path takes code keys in ascending order before any row lock
+DB=bio_map_deadlock; fresh $DB; add_ingest $DB; ctx $DB
+hr $DB "select biometric_save_mapping('DLA', '$DV', '$P1', now() - interval '1 day');" > /dev/null
+DL=0
+for i in 1 2 3 4 5; do
+  q $DB "select proof_ingest('$AG', '$DV', array['DLA'], now() - interval '$i hours', $((7000+i*10)), true, 0)" > /dev/null
+  Z=$(q $DB "select id from biometric_raw_events where dedupe_key = 'seq:$((7000+i*10))'")
+  ( q $DB "select proof_ingest('$AG', '$DV', array['DLB','DLA'], now() - interval '$i minutes', $((7001+i*10)), true, 0.7)" > /tmp/dl_a.txt 2>&1 ) &
+  ( hr $DB "select biometric_save_mapping('DLB', '$DV', '$P2', now() - interval '$((i*3)) days') ->> 'ok';" > /tmp/dl_b.txt ) &
+  ( hr $DB "select biometric_review_event($Z, 'dismiss', 'Deadlock test punch', 1) ->> 'message';" > /tmp/dl_c.txt ) &
+  wait
+  cat /tmp/dl_a.txt /tmp/dl_b.txt /tmp/dl_c.txt | grep -qi deadlock && DL=$((DL+1))
+  hr $DB "select biometric_end_mapping(id, now() - interval '1 second', 'reset for next round') from biometric_employee_mappings where employee_device_code = 'DLB' and valid_to is null;" > /dev/null
+done
+INV=$(invariant $DB)
+[ "$DL" = 0 ] && [ "$INV" = 0 ] && ok "5 rounds of concurrent ingestion + mapping + review: no deadlock, invariant holds" || bad "deadlocks=$DL inv=$INV"
+for d in bio_map_ingest_protocol bio_map_ingest_nolock bio_map_review_protocol bio_map_review_nolock bio_map_deadlock; do dropdb --if-exists $d; done
 
 # 6. existing correction behaviour is unchanged with the wrapper (approve, reject rules, own request, other company, audit)
 DB=bio_lock_regress; fresh $DB; setup_p $DB

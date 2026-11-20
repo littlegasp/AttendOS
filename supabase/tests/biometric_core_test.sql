@@ -250,6 +250,47 @@ select pg_temp.fails($$ update biometric_raw_events set punch_at = punch_at + in
 select pg_temp.fails($$ delete from biometric_raw_events where id = $$ || current_setting('t.r1'), 'cannot be changed', 'raw events cannot be deleted');
 select pg_temp.fails($$ truncate biometric_raw_events cascade $$, 'cannot be changed', 'raw events cannot be truncated');
 
+-- UTC offsets: ±HH:MM up to ±14:00 — refused by the insert guard and, independently, by the column check
+create function pg_temp.raw_off(off text, seq bigint) returns bigint language plpgsql as $$
+declare u timestamp := date_trunc('second', now() - interval '15 minutes') at time zone 'UTC'; rid bigint; loc text;
+begin
+  loc := to_char(u + case when off ~ '^[+-]\d{2}:[0-5]\d$' then off::interval else interval '0' end, 'YYYY-MM-DD HH24:MI:SS');
+  insert into public.biometric_raw_events (company_id, device_id, agent_id, employee_device_code, device_local_time, device_utc_offset, device_timezone,
+    punch_at, source_auth, dedupe_key, dedupe_basis)
+  values (current_setting('t.ca')::uuid, current_setting('t.dev1')::uuid, current_setting('t.agent')::uuid, '0101', loc, off, 'Asia/Kolkata',
+    u at time zone 'UTC', 'authenticated', 'seq:' || seq, 'record_seq') returning id into rid;
+  return rid;
+end $$;
+select pg_temp.raw_off('+05:30', 501); select pg_temp.raw_off('-04:00', 502); select pg_temp.raw_off('+14:00', 503); select pg_temp.raw_off('-12:00', 504);
+select pg_temp.expect((select string_agg(device_utc_offset || '=' || array_to_string(time_flags, '+'), ' ' order by dedupe_key) from biometric_raw_events
+  where dedupe_key in ('seq:501', 'seq:502', 'seq:503', 'seq:504')) = '+05:30= -04:00=offset_tz_mismatch +14:00=offset_tz_mismatch -12:00=offset_tz_mismatch',
+  'valid offsets +05:30, -04:00, +14:00, -12:00 are accepted (offsets that differ from the device zone are flagged for review)');
+select pg_temp.expect((select bool_and(punch_at = (device_local_time::timestamp - device_utc_offset::interval) at time zone 'UTC') from biometric_raw_events
+  where dedupe_key in ('seq:501', 'seq:502', 'seq:503', 'seq:504')), 'for every valid offset punch_at = device-local time minus the offset');
+do $$ declare o text; i int := 600; begin
+  foreach o in array array['+14:01', '-14:30', '+14:59', '+15:00', '-23:00', '+05:60', '+05:99', '+5:30', '05:30', '+0530', '+05:3', '+05:30 ', 'UTC', 'abc', ''] loop
+    i := i + 1;
+    begin perform pg_temp.raw_off(o, i); raise exception 'FAILED: offset "%" was accepted', o;
+    exception when check_violation then raise notice 'ok - invalid offset "%" refused', o; end;
+  end loop; end $$;
+begin;
+  alter table biometric_raw_events disable trigger raw_guard;
+  do $$ declare o text; i int := 700; begin
+    foreach o in array array['+14:01', '-14:30', '+05:60', '+5:30', 'abc'] loop
+      i := i + 1;
+      begin
+        insert into public.biometric_raw_events (company_id, device_id, agent_id, employee_device_code, device_local_time, device_utc_offset, device_timezone, punch_at, source_auth, dedupe_key, dedupe_basis)
+          values (current_setting('t.ca')::uuid, current_setting('t.dev1')::uuid, current_setting('t.agent')::uuid, '0101', '2026-01-01 10:00:00', o, 'Asia/Kolkata', now(), 'authenticated', 'seq:' || i, 'record_seq');
+        raise exception 'FAILED: column check accepted offset "%"', o;
+      exception when check_violation then
+        if sqlerrm !~ 'device_utc_offset_check' then raise exception 'FAILED: % (%)', o, sqlerrm; end if;
+        raise notice 'ok - the column check alone (guard switched off) refuses offset "%"', o;
+      end;
+    end loop; end $$;
+rollback;
+select pg_temp.fails($$ select pg_temp.raw('$$ || current_setting('t.dev1') || $$', '$$ || current_setting('t.agent') || $$', null, '0101', now(), 801, '{"local": "2026-02-30 10:00:00"}') $$,
+  'out of range|invalid input', 'an impossible device-local date is refused');
+
 -- ================================================================ 6. raw payload access
 select pg_temp.act('A hr');
 select pg_temp.fails($$ select raw_payload from biometric_raw_events $$, 'permission denied', 'HR: selecting raw_payload directly is refused');
@@ -282,11 +323,33 @@ insert into biometric_event_errors (company_id, device_id, agent_id, kind, detai
   values (current_setting('t.ca')::uuid, current_setting('t.dev1')::uuid, current_setting('t.agent')::uuid, 'conflict', '{"dedupe_key_basis":"record_seq"}', '{"uid":"0101","state":1}');
 select pg_temp.fails($$ insert into biometric_event_errors (company_id, kind, detail) values ('$$ || current_setting('t.ca') || $$', 'conflict', '{"raw_payload": {"a": 1}}') $$,
   'check constraint', 'error details cannot carry a raw payload');
+-- error records: evidence and attribution are immutable; only retries and a one-time resolution
+insert into biometric_event_errors (company_id, raw_event_id, agent_id, device_id, kind, detail, payload)
+  values (current_setting('t.ca')::uuid, current_setting('t.r1')::bigint, current_setting('t.agent')::uuid, current_setting('t.dev1')::uuid, 'conflict', '{"basis":"record_seq"}', '{"uid":"0101","state":2}');
+select set_config('t.err', (select max(id)::text from biometric_event_errors), false);
+do $$ declare f text; begin
+  foreach f in array array[
+    format('agent_id = %L', current_setting('t.agent2')), format('device_id = %L', current_setting('t.dev2')), format('company_id = %L', current_setting('t.cb')),
+    'raw_event_id = null', 'kind = ''too_old''', 'detail = ''{"basis":"edited"}''', 'payload = ''{"uid":"9999"}''',
+    'created_at = created_at - interval ''1 day'''] loop
+    begin
+      execute format('update public.biometric_event_errors set %s where id = %s', f, current_setting('t.err'));
+      raise exception 'FAILED: error field change accepted: %', f;
+    exception when insufficient_privilege then raise notice 'ok - changing error % is refused (owner included)', split_part(f, ' ', 1);
+    end;
+  end loop; end $$;
+update biometric_event_errors set attempts = attempts + 1, last_attempt_at = now() where id = current_setting('t.err')::bigint;
+select pg_temp.expect((select attempts = 2 from biometric_event_errors where id = current_setting('t.err')::bigint), 'a retry can be recorded (attempts, last attempt time)');
+select pg_temp.fails($$ update biometric_event_errors set attempts = 1 where id = $$ || current_setting('t.err'), 'only move forward', 'retry counts cannot go backwards');
+update biometric_event_errors set resolved_at = now(), resolved_by = current_setting('t.ea1')::uuid, resolution = 'Kept the original punch' where id = current_setting('t.err')::bigint;
+select pg_temp.expect((select resolution = 'Kept the original punch' from biometric_event_errors where id = current_setting('t.err')::bigint), 'a resolution can be recorded');
+select pg_temp.fails($$ update biometric_event_errors set resolution = 'changed my mind' where id = $$ || current_setting('t.err'), 'resolved error cannot be changed', 'a resolution is recorded once');
+select pg_temp.fails($$ delete from biometric_event_errors where id = $$ || current_setting('t.err'), 'cannot be changed', 'error records cannot be deleted');
 select pg_temp.act('A hr');
 select pg_temp.fails($$ select payload from biometric_event_errors $$, 'permission denied', 'HR cannot read conflict payloads from errors');
-select pg_temp.expect((select count(*) from (select id, kind, detail from biometric_event_errors) x) = 1, 'HR sees the error itself');
+select pg_temp.expect((select count(*) from (select id, kind, detail from biometric_event_errors) x) = 2, 'HR sees the errors themselves');
 select pg_temp.act('A admin');
-select pg_temp.expect(biometric_error_payload((select max(id) from biometric_event_errors)) ->> 'state' = '1', 'Admin reads the conflict payload through its checked function');
+select pg_temp.expect(biometric_error_payload((select min(id) from biometric_event_errors)) ->> 'state' = '1', 'Admin reads the conflict payload through its checked function');
 
 -- ================================================================ 7. mappings: scope, conflicts, effective dates, history
 select pg_temp.act('A hr');
@@ -430,6 +493,21 @@ select pg_temp.fails($$ delete from biometric_event_state where raw_event_id = $
 select pg_temp.fails($$ insert into biometric_event_reviews (company_id, raw_event_id, action, decided_by, decided_role, state_before, state_after)
   values ('$$ || current_setting('t.ca') || $$', $$ || current_setting('t.rf') || $$, 'dismiss', '00000000-0000-0000-0000-00000000000b', 'hr', '{}', '{}') $$,
   'check constraint', 'a dismissal without a reason is refused by the table itself');
+
+-- the table accepts exactly the decisions the review function performs
+select pg_temp.expect(
+  (select array_agg(a order by a) from (select (regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g'))[1] a
+     from pg_constraint c where c.conrelid = 'biometric_event_reviews'::regclass and pg_get_constraintdef(c.oid) like '%action = ANY%') x)
+  = (select array_agg(distinct a order by a) from (select (regexp_matches(prosrc, 'p_action = ''([a-z_]+)''', 'g'))[1] a from pg_proc where proname = 'biometric_review_event') y),
+  'review actions allowed by the table = actions performed by biometric_review_event (accept_time, confirm_duplicate, dismiss, keep_correction, keep_extra, not_duplicate)');
+select pg_temp.fails($$ insert into biometric_event_reviews (company_id, raw_event_id, action, reason, decided_by, decided_role, state_before, state_after)
+  values ('$$ || current_setting('t.ca') || $$', $$ || current_setting('t.rf') || $$, 'map', 'not a review', '00000000-0000-0000-0000-00000000000b', 'hr', '{}', '{}') $$,
+  'check constraint', '"map" is not a review action (mapping goes through the mapping functions and the audit log)');
+select pg_temp.fails($$ insert into biometric_event_reviews (company_id, raw_event_id, action, reason, decided_by, decided_role, state_before, state_after)
+  values ('$$ || current_setting('t.ca') || $$', $$ || current_setting('t.rf') || $$, 'reprocess', 'not yet', '00000000-0000-0000-0000-00000000000b', 'hr', '{}', '{}') $$,
+  'check constraint', '"reprocess" is refused until projection (0012) implements it');
+select pg_temp.expect((select count(*) from audit_log where action = 'attribute_unmatched' and after -> 'raw_event_ids' @> to_jsonb(current_setting('t.rd')::bigint)) = 1,
+  'attributing a waiting punch through a mapping is recorded in the audit log with the punch ids');
 
 -- ================================================================ 9. company isolation and role matrix
 -- B gets one row in every table so A can be shown not to see it (and the other way round)

@@ -284,3 +284,12 @@ test("sign-off: every review decision is Admin/HR only and records actor, role, 
     }
   }
 });
+
+test("B2 review actions are exactly the actions the database accepts (migration 0010)", () => {
+  const sql = readFileSync(join(__dirname, "../supabase/migrations/0010_biometric_core.sql"), "utf8");
+  const m = sql.match(/action text not null check \(action in \(([^)]*)\)\)/);
+  assert.ok(m, "review action constraint found");
+  const db = [...m![1]!.matchAll(/'([a-z_]+)'/g)].map((x) => x[1]).sort();
+  assert.deepEqual(Object.keys(DECISION).sort(), db);
+  for (const ds of Object.values(DECISIONS_FOR)) for (const d of ds) assert.ok(db.includes(d), d);
+});

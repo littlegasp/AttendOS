@@ -217,7 +217,8 @@ create table public.biometric_raw_events (
   employee_device_code text not null check (employee_device_code ~ '^[A-Za-z0-9_-]{1,32}$'),
   -- time: the original device reading is kept as sent, next to its zone/offset, the normalised instant and server receipt
   device_local_time text not null check (device_local_time ~ '^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?$'),
-  device_utc_offset text check (device_utc_offset is null or device_utc_offset ~ '^[+-](0\d|1[0-4]):[0-5]\d$'),
+  -- ±HH:MM, at most ±14:00 (the widest real offsets are -12:00 and +14:00)
+  device_utc_offset text check (device_utc_offset is null or device_utc_offset ~ '^[+-]((0\d|1[0-3]):[0-5]\d|14:00)$'),
   device_timezone text not null check (public.valid_timezone(device_timezone)),
   punch_at timestamptz not null,
   received_at timestamptz not null default now(),
@@ -261,6 +262,9 @@ declare
   flags text[] := new.time_flags;
 begin
   new.received_at := now(); -- never supplied by the caller, never used as the punch time
+  if new.device_utc_offset is not null and new.device_utc_offset !~ '^[+-]((0\d|1[0-3]):[0-5]\d|14:00)$' then
+    raise exception 'Invalid device UTC offset (use ±HH:MM, at most ±14:00)' using errcode = '23514';
+  end if;
   expected := case when new.device_utc_offset is not null then (lt - new.device_utc_offset::interval) at time zone 'UTC' else by_zone end;
   if new.punch_at is distinct from expected then
     raise exception 'punch_at must equal the device-local time in its zone/offset (expected %, got %)', expected, new.punch_at using errcode = '23514';
@@ -361,7 +365,9 @@ create table public.biometric_event_reviews (
   id bigint generated always as identity primary key,
   company_id uuid not null references public.companies (id),
   raw_event_id bigint not null,
-  action text not null check (action in ('map', 'accept_time', 'dismiss', 'confirm_duplicate', 'not_duplicate', 'keep_extra', 'keep_correction', 'reprocess')),
+  -- exactly the decisions biometric_review_event() performs (mapping is a mapping action, recorded in the audit log;
+  -- reprocessing arrives with projection in 0012 and will extend this list then)
+  action text not null check (action in ('accept_time', 'dismiss', 'confirm_duplicate', 'not_duplicate', 'keep_extra', 'keep_correction')),
   reason text check (reason is null or length(reason) <= 1000),
   decided_by uuid not null references public.employees (id),
   decided_role text not null check (decided_role in ('admin', 'hr')),
@@ -401,9 +407,16 @@ create index on public.biometric_event_errors (company_id, created_at desc) wher
 create function public.biometric_error_guard() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  if new.company_id <> old.company_id or new.kind <> old.kind or new.raw_event_id is distinct from old.raw_event_id
-     or new.detail <> old.detail or new.payload is distinct from old.payload or new.created_at <> old.created_at then
-    raise exception 'Only the attempt count and the resolution of an error can change' using errcode = '42501';
+  -- evidence and attribution never change; only the retry count and a one-time resolution may be recorded
+  if (new.id, new.company_id, new.raw_event_id, new.agent_id, new.device_id, new.kind, new.detail, new.payload, new.created_at)
+     is distinct from (old.id, old.company_id, old.raw_event_id, old.agent_id, old.device_id, old.kind, old.detail, old.payload, old.created_at) then
+    raise exception 'An error''s evidence and attribution cannot change; only retries and the resolution are recorded' using errcode = '42501';
+  end if;
+  if new.attempts < old.attempts or new.last_attempt_at < old.last_attempt_at then
+    raise exception 'Retry counts and times only move forward' using errcode = '42501';
+  end if;
+  if old.resolved_at is not null and (new.resolved_at, new.resolved_by, new.resolution) is distinct from (old.resolved_at, old.resolved_by, old.resolution) then
+    raise exception 'A resolved error cannot be changed' using errcode = '42501';
   end if;
   return new;
 end $$;
@@ -498,6 +511,12 @@ create view public.biometric_raw_events_safe with (security_invoker = true, secu
     from public.biometric_raw_events r;
 
 -- ================================================================ internal functions for the gateway (0011) — no grants
+-- One lock key per (company, device code). Mapping changes take it EXCLUSIVE; anything that attributes or decides a
+-- punch with that code takes it SHARED first (review here; ingestion and projection from 0011/0012).
+-- Lock order on every path: agent batch (43) → code keys (41, ascending key order) → person (7) → row locks.
+create function public.biometric_code_lock_key(p_company uuid, p_code text) returns bigint
+language sql immutable set search_path = public as $$ select hashtextextended(p_company::text || ':' || p_code, 41) $$;
+
 create function public.biometric_new_key(out key_prefix text, out agent_key text, out key_hash bytea)
 language plpgsql volatile set search_path = public as $$
 begin
@@ -696,7 +715,7 @@ begin
   if p_device is not null and not exists (select 1 from public.biometric_devices where id = p_device and company_id = cid) then
     raise exception 'Not allowed' using errcode = '42501';
   end if;
-  perform pg_advisory_xact_lock(hashtextextended(cid::text || ':' || code, 41));
+  perform pg_advisory_xact_lock(public.biometric_code_lock_key(cid, code));
 
   if exists (select 1 from public.biometric_employee_mappings m where m.company_id = cid and m.employee_device_code = code
                and m.device_id is not distinct from p_device and tstzrange(m.valid_from, m.valid_to, '[)') && tstzrange(p_valid_from, null, '[)')) then
@@ -727,6 +746,11 @@ begin
    where r.id = s.raw_event_id and s.company_id = cid and s.status = 'unmatched' and not s.decided and r.employee_device_code = code
      and public.biometric_resolve_mapping(cid, r.device_id, code, r.punch_at) = mid;
   get diagnostics n = row_count;
+  if n > 0 then
+    insert into public.audit_log (company_id, action, target, target_id, after)
+      values (cid, 'attribute_unmatched', 'biometric_employee_mappings', mid::text,
+              jsonb_build_object('raw_event_ids', (select jsonb_agg(raw_event_id order by raw_event_id) from public.biometric_event_state where mapping_id = mid)));
+  end if;
   return jsonb_build_object('ok', true, 'mapping_id', mid, 'attributed', n);
 end $$;
 
@@ -737,7 +761,7 @@ begin
   select * into m from public.biometric_employee_mappings where id = p_id and company_id = cid;
   if m.id is null then raise exception 'Not allowed' using errcode = '42501'; end if;
   if m.device_id is null and not public.is_admin() then raise exception 'Company-wide mappings are an Admin decision.' using errcode = '42501'; end if;
-  perform pg_advisory_xact_lock(hashtextextended(cid::text || ':' || m.employee_device_code, 41));
+  perform pg_advisory_xact_lock(public.biometric_code_lock_key(cid, m.employee_device_code));
   select * into m from public.biometric_employee_mappings where id = p_id;
   if m.valid_to is not null then return jsonb_build_object('ok', false, 'message', 'This mapping has already ended.'); end if;
   if length(trim(coalesce(p_reason, ''))) < 5 then return jsonb_build_object('ok', false, 'message', 'Give a reason (at least 5 characters).'); end if;
@@ -761,8 +785,12 @@ declare
   cid uuid := public.biometric_require(false);
   s public.biometric_event_state;
   next_status text;
+  code text;
   after public.biometric_event_state;
 begin
+  select employee_device_code into code from public.biometric_raw_events where id = p_raw and company_id = cid;
+  if code is null then raise exception 'Not allowed' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock_shared(public.biometric_code_lock_key(cid, code)); -- waits for a mapping change of this code
   select * into s from public.biometric_event_state where raw_event_id = p_raw and company_id = cid for update;
   if s.raw_event_id is null then raise exception 'Not allowed' using errcode = '42501'; end if;
   if s.decided then return jsonb_build_object('ok', false, 'message', 'This punch has already been decided.'); end if;

@@ -1,6 +1,6 @@
 # Biometric B3.1 — database foundation audit and design
 
-Status: **revision 2 (20 Nov 2026)** — B3.1 owner corrections incorporated (§11) and **B3.2 implemented locally**:
+Status: **revision 3 (20 Nov 2026)** — B3.1 owner corrections (§11), SQL review corrections (§11.7–11.8) and **B3.2 implemented locally**:
 `supabase/migrations/0010_biometric_core.sql` (§12). No SQL has been run against any Supabase project; no application
 code changed; no extension installed on any hosted project. Baseline: branch `feature/biometric-b1`, commit `d8146c9` (B2 approved). Starting point:
 BIOMETRIC_DATABASE_SCHEMA.md (B1 r2/r3). Every finding below was checked against the migrations 0001–0009, the test
@@ -495,13 +495,48 @@ no voiding column · device time trusted only after validation · 120 s future t
 device-specific mapping precedence · leading zeros preserved · raw events retained under the company's attendance
 retention. **These are proposed defaults. They become owner-approved only when you confirm them explicitly.**
 
+### 11.7 Mapping concurrency — the protocol 0011 and 0012 must follow (revision 3)
+One advisory lock key per (company, device code): `biometric_code_lock_key(company, code)` (namespace 41).
+| Path | Lock on the code key | Then |
+|---|---|---|
+| `biometric_save_mapping` / `biometric_end_mapping` (0010) | **exclusive** | insert/end the mapping, re-check processed punches, attribute waiting ones |
+| `biometric_review_event` (0010) | **shared** (by the punch's code) | lock the state row `for update`, check `decided` and `version` |
+| Ingestion (0011) | **shared**, for every distinct code of the batch, in ascending key order, before resolving any mapping | resolve the mapping at each `punch_at`, insert raw + state, commit |
+| Projection / reprocessing (0012) | **shared** for any punch whose attribution it reads or sets | then lock 7 per person |
+Why this is enough:
+- *No partially changed mapping:* a mapping change holds the key exclusively until it commits, so ingestion or a review
+  of that code either finishes before the change starts (and the change then sees and protects those punches) or
+  starts after it commits (and reads the committed mapping). READ COMMITTED gives each statement a new snapshot after
+  the lock is granted.
+- *No silent re-attribution:* attribution is frozen on the state row (trigger), the state guard refuses a mapping that
+  does not cover the punch, and the mapping functions refuse changes that would move a processed punch — and with the
+  lock they always see every punch that is processed or being processed.
+- *Lock order (no deadlocks):* agent batch (43) → code keys (41, ascending) → person (7) → row locks. No path takes a
+  code key after lock 7 or after a row lock; each mapping change takes a single code key.
+Proof (`lock_proof.sh` §7–9, real concurrent sessions): ingestion vs ending a mapping (end waits, then refuses —
+consistent); review-first vs back-dated mapping (mapping waits, then refuses); mapping-first vs review (review waits,
+then refuses a stale decision); controls without the ingestion or review lock produce violations; 5 rounds of
+ingestion + mapping + review in parallel: no deadlock, invariant holds.
+
+### 11.8 Revision 3 corrections (SQL review, 20 Nov 2026)
+1. `device_utc_offset` limited to ±14:00 (`^[+-]((0\d|1[0-3]):[0-5]\d|14:00)$`), checked by the insert guard (clear
+   message) **and** by the column check (proven with the guard switched off).
+2. `biometric_error_guard` protects id, company, raw event, agent, device, kind, detail, payload and creation time;
+   only `attempts`/`last_attempt_at` (forward only) and a one-time resolution (`resolved_at`, `resolved_by`,
+   `resolution`) may change.
+3. Review actions: `map` and `reprocess` removed from the table's allowed values. The table now accepts exactly the six
+   decisions `biometric_review_event` performs, and a test compares the two. Mapping a waiting punch is a mapping
+   action: `biometric_save_mapping` writes one `attribute_unmatched` audit entry listing the punch ids. `reprocess`
+   arrives with 0012. The B2 screen's decisions are the same six (app test compares them with the migration).
+4. Mapping concurrency: §11.7; `biometric_review_event` now takes the shared code lock (the controls show why).
+
 ## 12. B3.2 — what was built (local only)
 - `supabase/migrations/0010_biometric_core.sql`: extension `btree_gist`; 11 tables; composite foreign keys; four
   exclusion constraints; checks for codes, times, payload size/content, secrets in connection details; RLS + read
   policies; column-limited grants; safe view; insert-only/immutable guards (raw events, reviews, mapping history,
   processing attribution); company/active guards; audit triggers; key generation and check; mapping resolution;
   12 Admin/HR functions. No anon grant; no change to any existing table, function or policy.
-- Tests: `supabase/tests/biometric_core_test.sql` (153 checks) after `supabase_defaults_stub.sql` (Supabase default
-  grants on); `supabase/tests/concurrency/lock_proof.sh` (15); `supabase/tests/delete_company_test.sh` (4).
+- Tests: `supabase/tests/biometric_core_test.sql` (193 checks) after `supabase_defaults_stub.sql` (Supabase default
+  grants on); `supabase/tests/concurrency/lock_proof.sh` (21); `supabase/tests/delete_company_test.sh` (4).
 - Owner scripts: `delete_company.sql` (32 tables, works with or without 0010), `verify_hosted.sql` (check 13),
   `check_biometric_prereqs.sql` (new, read-only). Demo database rebuild includes 0010.
