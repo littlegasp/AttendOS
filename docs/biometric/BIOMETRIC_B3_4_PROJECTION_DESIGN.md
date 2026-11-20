@@ -1,11 +1,11 @@
-# Biometric B3.4 — attendance projection design (migration 0012), revision 3
+# Biometric B3.4 — attendance projection design (migration 0012), revision 4
 
-Status: **revision 3, design for final approval — 20 Nov 2026** (final corrections to revision 2 applied, §0.1;
-revision 2 changes in §0). Nothing in
+Status: **revision 4, design for final approval — 20 Nov 2026** (final SQL review correction applied, §0.2;
+revision 3 in §0.1, revision 2 in §0). Nothing in
 this document is implemented. Migration
 `0012_biometric_projection.sql` has **not** been written; no existing attendance function has been altered; no SQL
 was run against any hosted project; no extension installed; no hardware connected; no merge, no deployment.
-Baseline: branch `feature/biometric-b1` @ `725601a` (revision 2 of this design) (0010 and 0011 approved for local development). Every statement
+Baseline: branch `feature/biometric-b1` @ `ae0c8e5` (revision 3 of this design) (0010 and 0011 approved for local development). Every statement
 about current behaviour below was checked by reading migrations 0001–0011 (line references are to those files).
 
 Owner decisions applied (B3.3 authorisation): no voiding column · device time trusted only after validation ·
@@ -34,6 +34,15 @@ functions. Owner decisions Q1–Q10 from the B3.4 review: §14.
 | Null-safe authentication gate | `source_auth IS DISTINCT FROM 'authenticated'`; all soft checks use `decided IS NOT TRUE`, `coalesce(cardinality(...), 0)` and `ambiguous IS NOT FALSE`, so a null or unexpected value can only lead to review, never past it. | A4, §6.2 |
 | Final checks | Six queue properties re-verified against the SQL. | §15 |
 | Tests | Held-punch tests H1–H8 and authentication tests A1–A4 added. | §12.2 |
+
+## 0.2 What changed in revision 4 (final SQL review, 20 Nov 2026)
+| Correction | Change | Where |
+|---|---|---|
+| `next_check_at` enforced inside `biometric_project_day` | The day's row lock, the gate and every write read only `stored` punches and held punches with `next_check_at <= now()`. A held punch that is not due is not locked, read or written — its status, reason, `held_since`, `next_check_at` and version stay exactly as they were, even when another punch of the same day triggers the day. The per-day bulk backoff update is gone; a due held punch whose hold still applies gets its next time individually. | §6.8, A4 |
+| Bounded work within an employee-day | Each call of `biometric_project_day` makes at most `p_limit` writes (default 200). The gate stops before the limit and leaves the rest untouched (still `stored` or still due). Roles are decided over the whole day in time order, then written in a fixed order within the limit; if the limit is reached, the first unwritten punch keeps or gets `processed_at = null` (continuation mark) so the queue returns to the day. Nothing is skipped or marked processed without being processed. | §6.9, A4 |
+| Run-level write budgets | The queue now counts writes: current work 2,000 per run, held re-checks 500 per run, at most 200 per employee-day per call, in addition to the day budgets (200 / 50). | §6.1, A5 |
+| `stored` always means "awaiting processing" | `biometric_set_role` sets `processed_at = null` for `stored` and `now()` otherwise; new check `status <> 'stored' or processed_at is null`. This is what lets the queue find unfinished days reliably. | A3, A4 |
+| Tests | Q1–Q8 added (the six requested plus two). | §12.2 |
 
 ## 1. The design in one page
 
@@ -165,19 +174,19 @@ Unchanged and verified to need no change: `punch`, `punch_core`, `session_state`
 ## 6. Projection rules
 
 ### 6.1 Which employee-days are processed
-`biometric_run_projection(p_max = 200, p_held_max = 50)`, every minute, in three steps, each committed separately:
-0. Gives every attributed punch without a work date its work date (`biometric_work_date_at`) — for all companies, so
-   HR sees punches on the right day even while projection is off. Work date is frozen from then on.
-1. **Current work** — up to `p_max` employee-days, newest work day first: unprocessed punches (`stored`,
-   `processed_at is null`); `provisional_out` days whose close time has passed; closed days within the last 3
-   company-local days that still have only a check-in (sets `incomplete`).
-2. **Held punches** — up to `p_held_max` employee-days with a held punch whose `next_check_at` has passed, of any age,
-   longest-waiting first (§6.8).
-Both steps only consider **active** companies where projection is enabled, or days that already have a projected slot
-(Q3: a disabled company starts no new employee-day; started days still finish). Each employee-day runs through
-`biometric_project_one` → `biometric_project_day` and is committed on its own. On error the day's punches get
-`projection_failures + 1` and one `processing_failure` record; after 3 failures the day is skipped until an Admin fixes
-the cause and calls `biometric_retry_day`. A lock wait over 5 s (`lock_timeout`) is not a failure — retried next run.
+`biometric_run_projection()` every minute, in three steps, each employee-day committed on its own:
+
+| Step | Picks | Order | Budgets per run |
+|---|---|---|---|
+| 0 | attributed punches without a work date | — | one statement |
+| 1 current work | days with a punch awaiting processing (`stored`, or a continuation mark `processed_at is null`); `provisional_out` days whose close time has passed; closed days within the last 3 **company-local** days that still have only a check-in | newest work day first | 200 employee-days **and** 2,000 writes |
+| 2 held re-checks | days with a held punch whose `next_check_at` has passed, any age | longest-waiting first | 50 employee-days **and** 500 writes |
+
+Every call is limited to 200 writes for its employee-day (§6.9). Both steps only consider active companies where
+projection is enabled, or days that already have a projected slot (Q3). Each employee-day runs through
+`biometric_project_one` → `biometric_project_day` and is committed on its own. On error the day's punches that were
+due get `projection_failures + 1` and one `processing_failure` record; after 3 failures the day is skipped until an
+Admin fixes the cause and calls `biometric_retry_day`. A lock wait over 5 s is not a failure — retried next run.
 
 ### 6.2 The gate — what may count (requirements 7 and 8)
 Evaluated for every `stored` or `held` punch of the day each time the day is projected. Every comparison is null-safe
@@ -297,6 +306,14 @@ the backoff: **15 minutes** while held for less than a day, **1 hour** up to 7 d
 held punch is re-evaluated at least every 6 hours for as long as it is held; old holds cost little; HR "process
 now" (`biometric_project_now`) re-evaluates a day immediately.
 
+**Due is enforced where the work happens.** The queue chooses days by due held punches, but `biometric_project_day`
+checks `next_check_at <= now()` again itself, under lock 7: its row lock, its gate and every write cover only `stored`
+punches and **due** held punches. So when a new punch (or day close, or HR "process now") brings a day in, held
+punches of that day that are not yet due are not read or changed: their status, hold reason, `held_since`,
+`next_check_at` and version stay as they were. A due held punch whose hold still applies gets its own next time
+(backoff); nothing else moves. Two runs reaching the same day one after the other: the second finds the punch no
+longer due and leaves it alone.
+
 **How a held punch is released** (under lock 7, `biometric_project_day`):
 1. The hold is decided again from current data: import batch, device office, approved correction (→
    `after_correction`), employee active/exit/joining, roster (`plan_for`), full-day leave (`leave_on`), pending
@@ -323,6 +340,31 @@ projection is switched on again it is re-evaluated at its next check, and the ag
 **Fairness.** Current work (step 1) and holds (step 2) have separate budgets, so any number of old holds cannot delay
 today's punches, and current work cannot stop holds from being re-checked. Within step 2 the oldest `next_check_at`
 goes first, and the backoff pushes long-standing holds back, so newer holds are not starved by old ones.
+
+### 6.9 Bounded work inside one employee-day
+A device fault or a long agent backlog could put thousands of punches on one employee-day. Reading them is cheap; the
+cost is in writes (state updates, audit rows, slot rows). So each call of `biometric_project_day(emp, day, p_limit)`
+counts its writes and stops at `p_limit` (default 200, allowed 10–1000):
+
+1. **Gate** — `stored` and due held punches, oldest first. If the limit is reached, the call returns
+   `complete = false` **before** any role is decided. The punches it did not reach are untouched: still `stored`
+   (always `processed_at = null`) or still due, so the queue returns to the day. No ungated punch is ever used for a
+   slot, because roles are only decided after a gate pass that reached the end.
+2. **Roles** — first-in/last-out roles are decided over the whole day in time order (in memory), so the result does
+   not depend on how many calls it takes. They are then written: the slot rows together with their own punches' roles
+   (at most 5 writes, so a slot and its back-link are never split), then the remaining role changes — existing roles
+   first, new punches last, each in time order. If the limit is reached, the first unwritten punch keeps (if `stored`)
+   or gets a **continuation mark** (`processed_at = null`), and the call returns `complete = false`. The next call
+   decides the same roles again (deterministic), finds the already-written ones unchanged (no write, not counted) and
+   continues. The mark is cleared by the normal role write.
+3. **Device mode** decides and writes one punch at a time in time order; it stops at the limit the same way, so later
+   punches are always decided after the earlier ones are counted.
+4. **Locked days and mixed device modes** convert punches in raw-id order within the same limit and mark the next one.
+
+Guarantees: every call makes progress (at least one write) until the day is complete; no punch is skipped or marked
+processed without its role being written; chronological decisions, the employee lock, correction locks and
+session-safety rules are unchanged; repeating a complete call writes nothing. The queue gives each call at most
+`least(200, remaining run budget)`, so one large day uses at most 200 writes per run and other days keep moving.
 
 ## 7. Work date and day close
 
@@ -579,6 +621,41 @@ H7. Company-local dates: a company in `Pacific/Kiritimati` (+14) and one in `Ame
 H8. Concurrency: two runs at once over the same held days → each day evaluated once under lock 7 (the second sees
     nothing due); no duplicate audit rows.
 
+**Q — due held punches and bounded days (revision 4)**
+
+Q1. Held punch with `next_check_at` one hour ahead; a new stored punch triggers the same employee-day: the new punch
+    is processed; the held punch's row is byte-identical afterwards (status, hold reason, `held_since`,
+    `next_check_at`, `version`, `updated_at`), it is not locked by the call (a concurrent `SELECT … FOR UPDATE NOWAIT`
+    on it succeeds), and no audit row mentions it.
+
+Q2. The same punch once due: re-evaluated normally — still held → only `next_check_at` moves (per backoff); cause
+    fixed within 2 days → ordinary gate; after 2 days → `flagged · late_backfill`.
+
+Q3. Several held punches on one day, one due and two not due: only the due one changes; the two keep their original
+    `next_check_at` and state (checked field by field).
+
+Q4. Large backlog: one employee-day with 1,000 stored punches (first-in/last-out) and one with 1,000 device-mode
+    punches, `p_limit = 200`: each call writes ≤ 200 + 5; repeated runs finish the day; afterwards every punch has
+    exactly one final role, none is `stored`, no `processed_at` is null, the slots equal a single unbounded run on a
+    copy (same rows, same raws, same `at`), and in device mode the counted rows alternate validly in time order.
+    A gate made mostly of flags (900 unauthenticated punches) behaves the same way and never decides roles from
+    ungated punches.
+
+Q5. Concurrent queue runs: two `biometric_run_projection()` calls started together over 300 due held punches and 300
+    stored punches: each due punch is evaluated exactly once (one `next_check_at` change / one role change and one
+    audit row per punch), no deadlock, the second run's per-day calls return with nothing written for days the first
+    finished.
+
+Q6. Starvation: 5,000 held employee-days all due plus one day with 3,000 stored punches, plus 30 current days with
+    one punch each: one run projects all 30 current days (step 1, newest first), the large day advances by at most 200
+    writes, and held re-checks use only their own 500-write budget.
+
+Q7. Continuation marks: a role-phase stop leaves exactly one mark; the next call clears it; a day never stays selected
+    after it is complete (a third run writes nothing).
+
+Q8. `stored` invariant: the new check refuses `stored` with `processed_at` set; HR acceptance and mapping attachment
+    still produce `stored` with `processed_at = null`.
+
 **A — authentication gate (revision 3)**
 
 A1. `source_auth = 'unauthenticated_lan'` → `flagged · unauthenticated_source`; one individual acceptance → projected.
@@ -661,6 +738,7 @@ directly; the schedule is verified on hosted only after separate approval (Q1).
 | `pg_cron` availability check | Implemented, read-only (`deploy/check_biometric_prereqs.sql` check 6). Nothing installed (Q1). |
 | Source-value preflight | **Proposed** (A0, plus a read-only pre-check). Not run anywhere. |
 | Held-punch backoff, separate queue budget, late-release re-acceptance, null-safe gate (revision 3) | **Proposed only.** |
+| Due check inside projection, per-call write limit, run write budgets, continuation marks, `stored` invariant (revision 4) | **Proposed only.** |
 | Everything else in §4–§11 and Appendix A (columns, constraints, guard, statuses, functions, procedure, `day_events`, `biometric_day_pending`, `attendance_day_sources`, warnings, retry, verification outcome, UI, CSV Source column, script reorder) | **Proposed only.** Not written as a migration or code, not compiled, not executed. |
 | Tests in §12.2–§12.4 | **Planned only.** Not written. |
 | Real hardware, hosted project, deployment | Not done. |
@@ -686,19 +764,20 @@ No open questions remain for 0012.
 
 ---
 
-## 15. Final checks of the revised queue (revision 3)
-Each property checked against the Appendix A SQL (by reading; nothing was executed):
+## 15. Final checks of the revised queue (revision 4)
+Each property checked against the Appendix A SQL by reading; nothing was executed.
 
 | Property | Holds because |
 |---|---|
-| No held punch can stay stuck solely because of age | Step 2 has no date bound; every held punch has `next_check_at` (check constraint) and is re-evaluated at most 6 h after it falls due; index `biometric_event_state_held_due`. Only a still-valid hold, 3 processing failures (Admin retry) or a disabled company (by owner decision) keep it held. |
-| Old punches still require individual HR acceptance | Gate (b) flags a late release `late_backfill` regardless of `decided`; gate (c) requires an `accept_time` review dated after `late_release_at`; ordinary old punches are flagged by gate (d); there is no bulk path (Q2). |
-| HR acceptance never bypasses session safety or sequence checks | `decided` is read only in gate (d) (soft checks). The `correction_needed` checks in the first-in/last-out and device paths do not read it; `accept_time` on `correction_needed` is refused (A6). Tests S19–S25, H4. |
-| Disabled companies start no new employee-day | Both queue steps require `projection_enabled` or an existing projected slot; `biometric_project_day` returns `projection_disabled` for such days; `biometric_project_now` uses the same function. |
-| Started days still finish | The same condition admits days that already have a slot: provisional outs are finalised, `incomplete` is set, held punches on that day are re-evaluated. |
-| Bounded, idempotent, safe under concurrent runs | Two fixed budgets (200 + 50 employee-days); one employee-day per transaction under lock 7 with a 5 s lock timeout; `biometric_set_role` writes nothing when nothing changes; the backoff update only touches due rows; overlapping runs serialise per day and the later one finds nothing due (H8, concurrency proof 4). |
-
----
+| No held punch can stay stuck solely because of age | Step 2 has no date bound; every held punch has `next_check_at` (check constraint) and is re-evaluated at most 6 h after it falls due; index `biometric_event_state_held_due`. Only a still-valid hold, 3 processing failures (Admin retry) or a disabled company (owner decision) keep it held. |
+| Backoff cannot be bypassed by another punch of the same day | `biometric_project_day` locks, reads and writes held punches only when `next_check_at <= now()` (A4 lock statement and gate query); the per-day bulk update was removed (Q1, Q3). |
+| Old punches still require individual HR acceptance | Gate (b) flags a late release `late_backfill` regardless of `decided`; gate (c) requires an `accept_time` dated after `late_release_at`; ordinary old punches are flagged by gate (d); no bulk path (Q2). |
+| HR acceptance never bypasses session safety or sequence checks | `decided` is read only in gate (d). The `correction_needed` checks do not read it; `accept_time` on `correction_needed` is refused (A6). Tests S19–S25, H4. |
+| Disabled companies start no new employee-day; started days finish | Both queue steps and `biometric_project_day` require `projection_enabled` or an existing projected slot. |
+| Bounded | Per run: 200 + 50 employee-days and 2,000 + 500 writes; per call: `p_limit` writes (+ at most 5 for a slot and its punches); one transaction per employee-day; 5 s lock timeout. |
+| No punch lost or skipped | A stop always leaves the rest `stored`, due held, or carrying a continuation mark, and each of those is selected again by the queue (Q4, Q7). |
+| Idempotent | `biometric_set_role` writes only on a change (or to clear a mark); slot writes are no-ops when unchanged; a complete day selected again writes nothing (Q7). |
+| Safe under concurrent runs | Lock 7 serialises each employee-day; due-ness and roles are re-read after the lock; a punch handled by one run is not due / not pending for the next (Q5, H8). |
 
 ## Appendix A — proposed SQL for `0012_biometric_projection.sql` (NOT a migration; not compiled or run)
 
@@ -816,6 +895,12 @@ alter table public.biometric_event_state
   add column late_release_at timestamptz;   -- set when a hold ended after the automatic window: needs a NEW HR acceptance
 alter table public.biometric_event_state add constraint biometric_event_state_held_timing
   check ((status = 'held') = (held_since is not null and next_check_at is not null));
+-- 'stored' always means "awaiting processing" (no code before 0012 sets processed_at, so existing rows satisfy this)
+alter table public.biometric_event_state add constraint biometric_event_state_stored_pending
+  check (status <> 'stored' or processed_at is null) not valid;
+alter table public.biometric_event_state validate constraint biometric_event_state_stored_pending;
+create index biometric_event_state_pending on public.biometric_event_state (company_id, work_date, employee_id)
+  where processed_at is null;
 -- status list gains 'held' (constraint names are read from pg_constraint in the migration; shown here by meaning)
 alter table public.biometric_event_state drop constraint biometric_event_state_status_check;
 alter table public.biometric_event_state add constraint biometric_event_state_status_check check (status in ('stored', 'unmatched',
@@ -884,18 +969,21 @@ $$;
 -- one role change for one raw punch; nothing written (no version bump, no audit) if nothing differs
 create function public.biometric_set_role(p_raw bigint, p_status text, p_event bigint default null, p_slot text default null,
                                           p_reconciled bigint default null, p_flag text default null, p_hold text default null)
-returns void language plpgsql security definer set search_path = public as $$
+returns boolean language plpgsql security definer set search_path = public as $$
+-- returns true when it wrote (used to count the per-call write budget, §6.9)
 declare s public.biometric_event_state; a public.biometric_event_state;
 begin
   select * into s from public.biometric_event_state where raw_event_id = p_raw;
   if s.status = p_status and s.projected_event_id is not distinct from p_event and s.projection_slot is not distinct from p_slot
      and s.reconciled_with is not distinct from p_reconciled and s.hold_reason is not distinct from p_hold
-     and (p_flag is null or p_flag = any (s.flag_reasons)) and s.processed_at is not null then
-    return;
+     and (p_flag is null or p_flag = any (s.flag_reasons))
+     and (p_status = 'stored' or s.processed_at is not null) then        -- nothing to change, no continuation mark to clear
+    return false;
   end if;
   update public.biometric_event_state
      set status = p_status, projected_event_id = p_event, projection_slot = p_slot, reconciled_with = p_reconciled,
-         hold_reason = p_hold, processed_at = now(),
+         hold_reason = p_hold,
+         processed_at = case when p_status = 'stored' then null else now() end,   -- 'stored' always means "awaiting a role"
          held_since = case when p_status = 'held' then coalesce(case when s.status = 'held' then s.held_since end, now()) end,
          next_check_at = case when p_status = 'held'
                               then public.biometric_hold_next_check(coalesce(case when s.status = 'held' then s.held_since end, now())) end,
@@ -906,6 +994,7 @@ begin
     insert into public.audit_log (company_id, action, target, target_id, before, after)
       values (s.company_id, 'biometric_role_' || p_status, 'biometric_event_state', p_raw::text, to_jsonb(s), to_jsonb(a));
   end if;
+  return true;
 end $$;
 
 -- insert or move one slot row (same id); never touches a superseded slot
@@ -939,19 +1028,23 @@ begin
   return ev.id;
 end $$;
 
-create function public.biometric_project_day(p_emp uuid, p_day date) returns jsonb
+create function public.biometric_project_day(p_emp uuid, p_day date, p_limit int default 200) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   cid uuid := public.emp_company(p_emp);
   st public.biometric_settings := public.biometric_settings_for(cid);
+  lim int := least(greatest(coalesce(p_limit, 200), 10), 1000);   -- state/row writes allowed in this call (§6.9)
+  n int := 0;                                                       -- writes made so far
   emp public.employees;
   pl record;
   lv public.leave_requests;
   hold text;
+  want_hold text;
   closed boolean;
   locked boolean;
   modes text[];
   c record;
+  x record;
   ss record;
   prev_at timestamptz;
   app_in public.attendance_events;
@@ -960,6 +1053,9 @@ declare
   out_row public.attendance_events;
   r_ids bigint[] := '{}';
   r_at timestamptz[] := '{}';
+  r_pending boolean[] := '{}';
+  done bigint[] := '{}';                                            -- punches already given a role in this call
+  plan jsonb := '[]';                                               -- role decisions not yet written (§6.9)
   in_raw bigint; base_in timestamptz;
   out_raw bigint;
   ev_id bigint;
@@ -973,14 +1069,19 @@ begin
   perform set_config('attendos.projection', 'on', true);
 
   if not coalesce((select active from public.companies where id = cid), false) then
-    return jsonb_build_object('ok', false, 'reason', 'company_inactive');
+    return jsonb_build_object('ok', false, 'reason', 'company_inactive', 'complete', true, 'written', 0);
   end if;
   if not st.projection_enabled and not exists (select 1 from public.attendance_events
        where employee_id = p_emp and work_date = p_day and projection_slot is not null) then
-    return jsonb_build_object('ok', false, 'reason', 'projection_disabled');
+    return jsonb_build_object('ok', false, 'reason', 'projection_disabled', 'complete', true, 'written', 0);
   end if;
-  -- row locks in one order only: this person-day's punches by raw id
-  perform 1 from public.biometric_event_state where employee_id = p_emp and work_date = p_day order by raw_event_id for update;
+  -- the rows this call may change, locked once in raw-id order (a review of one of them waits, then is re-read).
+  -- Held punches that are not due are NOT locked, read or changed (§6.8).
+  perform 1 from public.biometric_event_state
+   where employee_id = p_emp and work_date = p_day
+     and (status in ('stored', 'projected', 'provisional_out', 'extra', 'reconciled', 'correction_needed')
+          or (status = 'held' and next_check_at <= now()))
+   order by raw_event_id for update;
 
   select * into emp from public.employees where id = p_emp;
   closed := now() >= public.biometric_day_close_at(p_emp, p_day)
@@ -999,53 +1100,68 @@ begin
     when exists (select 1 from public.attendance_corrections where employee_id = p_emp and work_date = p_day and status = 'pending')
       then 'correction_pending' end;
 
-  -- 1. gate new and held punches (§6.2, §6.8). Raw time and work date are never changed here.
+  -- 1. gate: stored punches and DUE held punches only, oldest first, at most `lim` writes (§6.2, §6.8, §6.9).
+  --    If the budget runs out, the rest are untouched and still stored / still due, so the queue returns to this day.
   for c in select s.raw_event_id id, s.status, s.decided, s.flag_reasons, s.late_release_at,
                   r.punch_at, r.source_auth, r.time_flags, r.import_batch_id, r.direction,
                   (select d.location_id from public.biometric_devices d where d.id = r.device_id) device_office
              from public.biometric_event_state s join public.biometric_raw_events r on r.id = s.raw_event_id
-            where s.employee_id = p_emp and s.work_date = p_day and s.status in ('stored', 'held')
+            where s.employee_id = p_emp and s.work_date = p_day
+              and (s.status = 'stored' or (s.status = 'held' and s.next_check_at <= now()))
             order by r.punch_at, s.raw_event_id loop
+    if n >= lim then return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'gate'); end if;
     if c.punch_at > now() then continue; end if;
-    -- (a) holds: evaluated from scratch on every run; a punch leaves 'held' only when no hold applies now
-    if c.import_batch_id is not null then perform public.biometric_set_role(c.id, 'held', p_hold => 'import_not_enabled');
-    elsif locked then perform public.biometric_set_role(c.id, 'after_correction');
-    elsif c.device_office is null then perform public.biometric_set_role(c.id, 'held', p_hold => 'device_without_office');   -- Q6
-    elsif hold is not null then perform public.biometric_set_role(c.id, 'held', p_hold => hold);
-    -- (b) the hold has just ended but the punch is now older than the automatic window: never projected automatically,
-    --     whatever HR decided before; it needs a new, individual HR acceptance
+    want_hold := case when c.import_batch_id is not null then 'import_not_enabled'
+                      when locked then null
+                      when c.device_office is null then 'device_without_office'          -- Q6
+                      else hold end;
+    if locked and c.import_batch_id is null then
+      n := n + public.biometric_set_role(c.id, 'after_correction')::int;
+    -- (a) a hold applies now (decided from current data on every look)
+    elsif want_hold is not null then
+      if public.biometric_set_role(c.id, 'held', p_hold => want_hold) then n := n + 1;
+      elsif c.status = 'held' then                        -- same hold, due look: only the next look time moves
+        update public.biometric_event_state set next_check_at = public.biometric_hold_next_check(held_since)
+         where raw_event_id = c.id;
+        n := n + 1;
+      end if;
+    -- (b) hold ended after the automatic window: never projected automatically; needs a NEW individual acceptance
     elsif c.status = 'held' and c.punch_at < now() - make_interval(days => st.auto_project_max_age_days) then
       update public.biometric_event_state set late_release_at = now() where raw_event_id = c.id;
       perform public.biometric_set_role(c.id, 'flagged', p_flag => 'late_backfill');
-    -- (c) released late earlier: only an acceptance given AFTER that release counts (defence in depth for (b))
+      n := n + 1;
+    -- (c) released late earlier: only an acceptance given AFTER that release counts
     elsif c.late_release_at is not null and not exists (
             select 1 from public.biometric_event_reviews v
              where v.raw_event_id = c.id and v.action = 'accept_time' and v.decided_at > c.late_release_at) then
-      perform public.biometric_set_role(c.id, 'flagged', p_flag => 'late_backfill');
-    -- (d) soft checks — an individual HR acceptance (decided) covers these and only these; null-safe throughout
+      n := n + public.biometric_set_role(c.id, 'flagged', p_flag => 'late_backfill')::int;
+    -- (d) soft checks, null-safe; an individual HR acceptance covers these and only these
     elsif c.decided is not true and c.source_auth is distinct from 'authenticated' then
-      perform public.biometric_set_role(c.id, 'flagged', p_flag => 'unauthenticated_source');
+      n := n + public.biometric_set_role(c.id, 'flagged', p_flag => 'unauthenticated_source')::int;
     elsif c.decided is not true and (coalesce(cardinality(c.time_flags), 0) > 0 or coalesce(cardinality(c.flag_reasons), 0) > 0) then
-      perform public.biometric_set_role(c.id, 'flagged');
+      n := n + public.biometric_set_role(c.id, 'flagged')::int;
     elsif c.decided is not true and c.punch_at < now() - make_interval(days => st.auto_project_max_age_days) then
-      perform public.biometric_set_role(c.id, 'flagged', p_flag => 'late_backfill');
+      n := n + public.biometric_set_role(c.id, 'flagged', p_flag => 'late_backfill')::int;
     elsif c.decided is not true and (public.biometric_work_date_at(p_emp, c.punch_at, c.direction)).ambiguous is not false then
-      perform public.biometric_set_role(c.id, 'flagged', p_flag => 'ambiguous_work_date');
-    -- (e) released within the window: continues as an ordinary punch (session-safety and sequence rules still apply)
+      n := n + public.biometric_set_role(c.id, 'flagged', p_flag => 'ambiguous_work_date')::int;
+    -- (e) released within the window: back to 'stored' (awaiting a role), then the ordinary rules below
     elsif c.status = 'held' then
-      perform public.biometric_set_role(c.id, 'stored');
+      n := n + public.biometric_set_role(c.id, 'stored')::int;
     end if;
   end loop;
-  -- still-held punches of this day: next look according to the backoff (bounded re-evaluation, §6.8)
-  update public.biometric_event_state set next_check_at = public.biometric_hold_next_check(held_since)
-   where employee_id = p_emp and work_date = p_day and status = 'held' and next_check_at <= now();
+
   if locked then  -- a provisional out on a corrected day is no longer a candidate (§7.1 of the architecture)
     for c in select raw_event_id id from public.biometric_event_state
               where employee_id = p_emp and work_date = p_day
-                and (status = 'correction_needed' or (status in ('provisional_out', 'extra', 'reconciled') and not decided)) loop
-      perform public.biometric_set_role(c.id, 'after_correction');
+                and (status = 'correction_needed' or (status in ('provisional_out', 'extra', 'reconciled') and not decided))
+              order by raw_event_id loop
+      if n >= lim then
+        update public.biometric_event_state set processed_at = null where raw_event_id = c.id;   -- continuation mark (§6.9)
+        return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'locked');
+      end if;
+      n := n + public.biometric_set_role(c.id, 'after_correction')::int;
     end loop;
-    return jsonb_build_object('ok', true, 'locked', true);
+    return jsonb_build_object('ok', true, 'complete', true, 'written', n, 'locked', true);
   end if;
 
   -- 2. candidates: gated punches plus the day's current roles (recomputed every run; decided extras stay as HR left them)
@@ -1058,10 +1174,15 @@ begin
      or exists (select 1 from public.attendance_events where employee_id = p_emp and work_date = p_day and projection_slot is not null
                   and direction_basis <> case when modes[1] = 'device' then 'device' else 'inferred_first_last' end) then
     for c in select s.raw_event_id id from public.biometric_event_state s
-              where s.employee_id = p_emp and s.work_date = p_day and s.status in ('stored', 'provisional_out') loop
-      perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'mixed_direction_modes');
+              where s.employee_id = p_emp and s.work_date = p_day and s.status in ('stored', 'provisional_out')
+              order by s.raw_event_id loop
+      if n >= lim then
+        update public.biometric_event_state set processed_at = null where raw_event_id = c.id;
+        return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'mixed_modes');
+      end if;
+      n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'mixed_direction_modes')::int;
     end loop;
-    return jsonb_build_object('ok', true, 'flagged', 'mixed_direction_modes');
+    return jsonb_build_object('ok', true, 'complete', true, 'written', n, 'flagged', 'mixed_direction_modes');
   end if;
 
   select * into app_in from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null
@@ -1070,68 +1191,89 @@ begin
      and kind = 'out' and source in ('web', 'correction') order by at desc, id desc limit 1;
 
   if modes[1] = 'device' then
-    -- 3a. device direction (§6.5): punches not yet counted, in time order
-    for c in select s.raw_event_id id, s.decided, r.punch_at, r.direction
+    -- 3a. device direction (§6.5): one punch at a time in time order, each decided against the rows already counted.
+    --     Stops when the budget is used; later punches stay stored (or are marked) and are taken next run, still in order.
+    for c in select s.raw_event_id id, s.status, s.decided, r.punch_at, r.direction
                from public.biometric_event_state s join public.biometric_raw_events r on r.id = s.raw_event_id
               where s.employee_id = p_emp and s.work_date = p_day and r.punch_at <= now() and s.projected_event_id is null
                 and (s.status = 'stored' or (s.status in ('extra', 'reconciled') and not s.decided))
               order by r.punch_at, s.raw_event_id loop
-      if c.direction is null then perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'no_direction'); continue; end if;
-      -- the same key pressed on two devices, or pressed again within the double-press window: one punch
+      if n >= lim then
+        update public.biometric_event_state set processed_at = null where raw_event_id = c.id and status <> 'stored';
+        return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'device');
+      end if;
+      if c.direction is null then n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'no_direction')::int; continue; end if;
       if exists (select 1 from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day and e.superseded_by is null
                    and e.source = 'biometric' and e.kind = c.direction and abs(extract(epoch from e.at - c.punch_at)) <= st.double_press_s) then
-        perform public.biometric_set_role(c.id, 'extra', p_flag => 'double_press'); continue;
+        n := n + public.biometric_set_role(c.id, 'extra', p_flag => 'double_press')::int; continue;
       end if;
+      ev_id := null;
       select e.id into ev_id from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day and e.superseded_by is null
          and e.kind = c.direction and e.source in ('web', 'correction') and abs(extract(epoch from e.at - c.punch_at)) <= st.reconcile_min * 60
        order by abs(extract(epoch from e.at - c.punch_at)) limit 1;
-      if ev_id is not null then perform public.biometric_set_role(c.id, 'reconciled', p_reconciled => ev_id); continue; end if;
+      if ev_id is not null then n := n + public.biometric_set_role(c.id, 'reconciled', p_reconciled => ev_id)::int; continue; end if;
       select max(at) into newest from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null;
-      if newest is not null and c.punch_at <= newest then perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'out_of_order'); continue; end if;
+      if newest is not null and c.punch_at <= newest then
+        n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'out_of_order')::int; continue;
+      end if;
       select kind into last_kind from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null
        order by at desc, id desc limit 1;
       select * into ss from public.session_state(p_emp);
-      -- a repeat of the direction just counted, within the reconciliation window, is an extra punch (not an error)
       if c.direction = last_kind and newest is not null and c.punch_at - newest <= make_interval(mins => st.reconcile_min) then
-        perform public.biometric_set_role(c.id, 'extra', p_flag => 'repeat_' || c.direction); continue;
+        n := n + public.biometric_set_role(c.id, 'extra', p_flag => 'repeat_' || c.direction)::int; continue;
       end if;
       if (c.direction = 'in' and (last_kind in ('in', 'break_start', 'break_end')
              or (ss.state <> 'off' and ss.work_date <> p_day and now() < public.biometric_day_close_at(p_emp, ss.work_date))))
          or (c.direction = 'out' and coalesce(last_kind, 'out') in ('out', 'break_start')) then
-        perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'impossible_transition'); continue;
+        n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'impossible_transition')::int; continue;
       end if;
       if c.direction = 'in' and closed                              -- session safety: HR acceptance does NOT bypass this
          and c.punch_at > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity') then
-        perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day'); continue;
+        n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day')::int; continue;
       end if;
       ev_id := public.biometric_write_slot(p_emp, p_day, 'dev:' || c.id, c.direction, c.id, 'device');
       perform public.biometric_set_role(c.id, 'projected', ev_id, 'dev:' || c.id);
+      n := n + 2;
     end loop;
-    return jsonb_build_object('ok', true, 'mode', 'device');
+    return jsonb_build_object('ok', true, 'complete', true, 'written', n, 'mode', 'device');
   end if;
 
-  -- 3b. first-in / last-out (§6.4)
+  -- 3b. first-in / last-out (§6.4). Roles are DECIDED over the whole day in time order (in memory), then WRITTEN:
+  --     slot rows with their own punches first (at most 5 writes), then the other role changes, existing roles before
+  --     new punches, each group in time order, within the budget (§6.9).
+  if n >= lim then   -- no room left after the gate: keep the day due and stop before deciding anything
+    update public.biometric_event_state set processed_at = null
+     where raw_event_id = (select min(raw_event_id) from public.biometric_event_state
+                            where employee_id = p_emp and work_date = p_day
+                              and (status in ('projected', 'provisional_out') or (status in ('extra', 'reconciled') and not decided)))
+       and status <> 'stored';
+    return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'before_roles');
+  end if;
   select * into in_row from public.attendance_events where employee_id = p_emp and work_date = p_day and projection_slot = 'in';
   select * into out_row from public.attendance_events where employee_id = p_emp and work_date = p_day and projection_slot = 'out';
-  for c in select s.raw_event_id id, s.projected_event_id, r.punch_at
+  for c in select s.raw_event_id id, s.status, s.projected_event_id, r.punch_at
              from public.biometric_event_state s join public.biometric_raw_events r on r.id = s.raw_event_id
             where s.employee_id = p_emp and s.work_date = p_day and r.punch_at <= now()
               and (s.status in ('stored', 'projected', 'provisional_out') or (s.status in ('extra', 'reconciled') and not s.decided))
             order by r.punch_at, s.raw_event_id loop
     if prev_at is not null and c.punch_at < prev_at + make_interval(secs => st.double_press_s) and c.projected_event_id is null then
-      perform public.biometric_set_role(c.id, 'extra', p_flag => 'double_press'); continue;
+      plan := plan || jsonb_build_object('raw', c.id, 'status', 'extra', 'flag', 'double_press', 'pending', c.status = 'stored', 'at', c.punch_at);
+      done := done || c.id; continue;
     end if;
     prev_at := c.punch_at;
     if c.projected_event_id is null and app_in.id is not null and abs(extract(epoch from c.punch_at - app_in.at)) <= st.reconcile_min * 60 then
-      perform public.biometric_set_role(c.id, 'reconciled', p_reconciled => app_in.id); continue;
+      plan := plan || jsonb_build_object('raw', c.id, 'status', 'reconciled', 'rec', app_in.id, 'pending', c.status = 'stored', 'at', c.punch_at);
+      done := done || c.id; continue;
     end if;
     if c.projected_event_id is null and app_out.id is not null and abs(extract(epoch from c.punch_at - app_out.at)) <= st.reconcile_min * 60 then
-      perform public.biometric_set_role(c.id, 'reconciled', p_reconciled => app_out.id); continue;
+      plan := plan || jsonb_build_object('raw', c.id, 'status', 'reconciled', 'rec', app_out.id, 'pending', c.status = 'stored', 'at', c.punch_at);
+      done := done || c.id; continue;
     end if;
     if app_in.id is not null and c.punch_at < app_in.at then
-      perform public.biometric_set_role(c.id, 'correction_needed', p_flag => 'before_app_checkin'); continue;
+      plan := plan || jsonb_build_object('raw', c.id, 'status', 'correction_needed', 'flag', 'before_app_checkin', 'pending', c.status = 'stored', 'at', c.punch_at);
+      done := done || c.id; continue;
     end if;
-    r_ids := r_ids || c.id; r_at := r_at || c.punch_at;
+    r_ids := r_ids || c.id; r_at := r_at || c.punch_at; r_pending := r_pending || (c.status = 'stored');
   end loop;
 
   -- in slot
@@ -1140,8 +1282,9 @@ begin
   elsif in_row.id is not null then
     in_raw := in_row.biometric_event_id; base_in := in_row.at;
     if cardinality(r_ids) > 0 and r_ids[1] <> in_raw and r_at[1] < in_row.at then
-      if closed then perform public.biometric_set_role(r_ids[1], 'correction_needed', p_flag => 'after_day_close');
-                     r_ids := r_ids[2:]; r_at := r_at[2:];
+      if closed then
+        plan := plan || jsonb_build_object('raw', r_ids[1], 'status', 'correction_needed', 'flag', 'after_day_close', 'pending', r_pending[1], 'at', r_at[1]);
+        done := done || r_ids[1]; r_ids := r_ids[2:]; r_at := r_at[2:]; r_pending := r_pending[2:];
       else in_raw := r_ids[1]; base_in := r_at[1]; end if;
     end if;
   elsif cardinality(r_ids) > 0 then
@@ -1150,52 +1293,75 @@ begin
 
   -- out candidate: latest remaining punch ≥ min session after the in, only if the app has not checked out
   if base_in is not null and app_out.id is null then
-    for i in reverse cardinality(r_ids) .. 1 loop
+    for i in reverse coalesce(cardinality(r_ids), 0) .. 1 loop
       if r_ids[i] is distinct from in_raw and r_at[i] >= base_in + make_interval(mins => st.min_session_min) then out_raw := r_ids[i]; exit; end if;
     end loop;
   end if;
   if out_row.id is not null and out_raw is distinct from out_row.biometric_event_id then   -- a counted check-out never moves
-    if out_raw is not null then perform public.biometric_set_role(out_raw, 'correction_needed', p_flag => 'after_day_close'); end if;
+    if out_raw is not null then
+      plan := plan || jsonb_build_object('raw', out_raw, 'status', 'correction_needed', 'flag', 'after_day_close', 'pending', true,
+                                         'at', (select punch_at from public.biometric_raw_events where id = out_raw));
+      done := done || out_raw;
+    end if;
     out_raw := out_row.biometric_event_id;
   end if;
 
-  -- session protection for a new in (§6.6)
+  -- session protection for a new in (§6.6) — not bypassed by any HR acceptance
   if in_raw is not null and in_row.id is null then
     select * into ss from public.session_state(p_emp);
-    if ss.state <> 'off' and ss.work_date <> p_day and now() < public.biometric_day_close_at(p_emp, ss.work_date) then
-      perform public.biometric_set_role(in_raw, 'correction_needed', p_flag => 'open_session_other_day'); in_raw := null; out_raw := null;
-    elsif closed and out_raw is null                                 -- session safety: HR acceptance does NOT bypass this
-          and base_in > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity') then
-      perform public.biometric_set_role(in_raw, 'correction_needed', p_flag => 'would_open_closed_day'); in_raw := null;
+    if (ss.state <> 'off' and ss.work_date <> p_day and now() < public.biometric_day_close_at(p_emp, ss.work_date))
+       or (closed and out_raw is null
+           and base_in > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity')) then
+      plan := plan || jsonb_build_object('raw', in_raw, 'status', 'correction_needed', 'pending', true, 'at', base_in,
+                'flag', case when ss.state <> 'off' and ss.work_date <> p_day then 'open_session_other_day' else 'would_open_closed_day' end);
+      done := done || in_raw;
+      if ss.state <> 'off' and ss.work_date <> p_day then out_raw := null; end if;
+      in_raw := null;
     end if;
   end if;
 
-  -- write: in, then out (provisional before close), then everything else is extra
+  -- write the slots together with their own punches' roles (structural, at most 5 writes)
   if in_raw is not null then
     ev_id := public.biometric_write_slot(p_emp, p_day, 'in', 'in', in_raw, 'inferred_first_last');
     if in_row.id is not null and in_row.biometric_event_id <> in_raw then
       perform public.biometric_set_role(in_row.biometric_event_id, 'extra', p_flag => 'replaced_by_earlier_punch');
+      done := done || in_row.biometric_event_id; n := n + 1;
     end if;
     perform public.biometric_set_role(in_raw, 'projected', ev_id, 'in',
       p_flag => case when closed and out_raw is null and app_out.id is null then 'incomplete' end);
+    done := done || in_raw; n := n + 2;
   end if;
   if out_raw is not null then
     if out_row.id is not null then
-      perform public.biometric_set_role(out_raw, 'projected', out_row.id, 'out');
+      n := n + public.biometric_set_role(out_raw, 'projected', out_row.id, 'out')::int;
     elsif closed then
       ev_id := public.biometric_write_slot(p_emp, p_day, 'out', 'out', out_raw, 'inferred_first_last', 'biometric_finalise');
       perform public.biometric_set_role(out_raw, 'projected', ev_id, 'out');
+      n := n + 2;
     else
-      perform public.biometric_set_role(out_raw, 'provisional_out');
+      n := n + public.biometric_set_role(out_raw, 'provisional_out')::int;
     end if;
+    done := done || out_raw;
   end if;
+  -- everything else is an extra punch (kept, shown, never counted)
   for i in 1 .. coalesce(cardinality(r_ids), 0) loop
-    if r_ids[i] is distinct from in_raw and r_ids[i] is distinct from out_raw
-       and (select status from public.biometric_event_state where raw_event_id = r_ids[i]) <> 'flagged' then
-      perform public.biometric_set_role(r_ids[i], 'extra');
+    if not (r_ids[i] = any (done)) then
+      plan := plan || jsonb_build_object('raw', r_ids[i], 'status', 'extra', 'pending', r_pending[i], 'at', r_at[i]);
     end if;
   end loop;
-  return jsonb_build_object('ok', true, 'mode', 'first_last', 'closed', closed);
+
+  -- write the remaining decisions within the budget: existing roles first, then new punches, each in time order.
+  -- If the budget runs out, the first unwritten punch is left (or marked) with processed_at = null so the queue
+  -- returns to this day; the next call decides the same roles again (deterministic) and continues.
+  for x in select * from jsonb_to_recordset(plan) as t(raw bigint, status text, rec bigint, flag text, pending boolean, at timestamptz)
+            order by pending, at, raw loop
+    if n >= lim then
+      update public.biometric_event_state set processed_at = null where raw_event_id = x.raw and status <> 'stored';
+      return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'roles');
+    end if;
+    n := n + public.biometric_set_role(x.raw, x.status, null, null, x.rec, x.flag)::int;
+  end loop;
+  return jsonb_build_object('ok', true, 'complete', true, 'written', n, 'mode', 'first_last', 'closed', closed);
 end $$;
 ```
 
@@ -1204,9 +1370,15 @@ end $$;
 -- SECURITY INVOKER and no SET clause on purpose: PostgreSQL refuses COMMIT inside a SECURITY DEFINER procedure or
 -- one with a SET clause. It runs as the job owner (postgres) only; every name is schema-qualified; it is revoked
 -- from public/anon/authenticated, and everything it calls is SECURITY DEFINER with a pinned search_path.
-create procedure public.biometric_run_projection(p_max int default 200, p_held_max int default 50)
+create procedure public.biometric_run_projection(p_max int default 200, p_held_max int default 50,
+                                                 p_write_budget int default 2000, p_held_write_budget int default 500,
+                                                 p_day_limit int default 200)
 language plpgsql as $$
-declare k record;
+declare
+  k record;
+  w int;
+  left_current int := p_write_budget;
+  left_held int := p_held_write_budget;
 begin
   -- 0. work dates for newly attributed punches (frozen once set)
   update public.biometric_event_state s
@@ -1215,15 +1387,18 @@ begin
    where r.id = s.raw_event_id and s.work_date is null and s.employee_id is not null and s.status <> 'unmatched';
   commit;
 
-  -- 1. current work, own budget (p_max), newest work day first so a backlog never delays today:
-  --    unprocessed punches, days whose close time has passed, recent closed days still missing a check-out
+  -- 1. current work: own day budget (p_max) and write budget (p_write_budget); newest work day first; each employee-day
+  --    at most p_day_limit writes per call, so one huge day cannot use the whole run. Selected: punches awaiting
+  --    processing (stored, or a continuation mark), days whose close time has passed, recent closed days without a check-out.
   for k in
     select distinct s.employee_id, s.work_date, s.company_id
       from public.biometric_event_state s
       join public.companies co on co.id = s.company_id and co.active
       left join public.biometric_settings b on b.company_id = s.company_id
      where s.work_date is not null and s.projection_failures < 3
-       and ((s.processed_at is null and s.status = 'stored')
+       and ((s.processed_at is null
+             and (s.status in ('stored', 'projected', 'provisional_out', 'correction_needed')
+                  or (s.status in ('extra', 'reconciled') and not s.decided)))
          or (s.status = 'provisional_out' and now() >= public.biometric_day_close_at(s.employee_id, s.work_date))
          or (s.status = 'projected' and s.projection_slot = 'in' and not ('incomplete' = any (s.flag_reasons))
              and s.work_date >= public.local_today(s.company_id) - 3                     -- company-local date, not current_date
@@ -1236,12 +1411,16 @@ begin
      order by s.work_date desc, s.employee_id
      limit p_max
   loop
-    call public.biometric_project_one(k.employee_id, k.work_date, k.company_id);
+    exit when left_current <= 0;
+    w := 0;
+    call public.biometric_project_one(k.employee_id, k.work_date, k.company_id, least(p_day_limit, left_current), w);
+    left_current := left_current - greatest(w, 1);
     commit;
   end loop;
 
-  -- 2. held punches, SEPARATE budget (p_held_max), any age, longest-waiting first. Backoff (§6.8) keeps old holds from
-  --    crowding out newer ones; the separate budget keeps all holds from crowding out step 1.
+  -- 2. held punches: SEPARATE day and write budgets; only punches whose next_check_at has passed; any age; the
+  --    longest-waiting first. project_day itself re-checks "due" under the lock, so a held punch that another run has
+  --    just looked at is skipped, and not-due held punches of the same day are never touched.
   for k in
     select s.employee_id, s.work_date, s.company_id, min(s.next_check_at) due
       from public.biometric_event_state s
@@ -1255,21 +1434,28 @@ begin
      order by due, s.work_date desc
      limit p_held_max
   loop
-    call public.biometric_project_one(k.employee_id, k.work_date, k.company_id);
+    exit when left_held <= 0;
+    w := 0;
+    call public.biometric_project_one(k.employee_id, k.work_date, k.company_id, least(p_day_limit, left_held), w);
+    left_held := left_held - greatest(w, 1);
     commit;
   end loop;
 end $$;
 
--- one employee-day with failure accounting (no COMMIT here; the caller commits)
-create procedure public.biometric_project_one(p_emp uuid, p_day date, p_company uuid)
+-- one employee-day with failure accounting; reports the writes it made (no COMMIT here; the caller commits)
+create procedure public.biometric_project_one(p_emp uuid, p_day date, p_company uuid, p_limit int, inout p_written int)
 language plpgsql as $$
+declare res jsonb;
 begin
-  perform public.biometric_project_day(p_emp, p_day);
+  res := public.biometric_project_day(p_emp, p_day, p_limit);
+  p_written := coalesce((res ->> 'written')::int, 0);
 exception
-  when lock_not_available then null;                                     -- busy: retried next run, not a failure
+  when lock_not_available then p_written := 0;                           -- busy: retried next run, not a failure
   when others then
+    p_written := 0;
     update public.biometric_event_state set projection_failures = projection_failures + 1
-     where employee_id = p_emp and work_date = p_day and status in ('stored', 'held', 'provisional_out');
+     where employee_id = p_emp and work_date = p_day
+       and (status in ('stored', 'provisional_out') or (status = 'held' and next_check_at <= now()) or processed_at is null);
     insert into public.biometric_event_errors (company_id, kind, detail)
       values (p_company, 'processing_failure', jsonb_build_object('employee_id', p_emp, 'work_date', p_day,
               'sqlstate', sqlstate, 'message', left(sqlerrm, 300)));
@@ -1440,11 +1626,11 @@ case when e.source = 'correction' then 'corrected'
 ### A9. Grants, owner scripts, schedule
 ```sql
 revoke all on function public.biometric_work_date_at(uuid, timestamptz, text), public.biometric_day_close_at(uuid, date),
-  public.biometric_set_role(bigint, text, bigint, text, bigint, text, text),
+  public.biometric_set_role(bigint, text, bigint, text, bigint, text, text),   -- returns boolean
   public.biometric_write_slot(uuid, date, text, text, bigint, text, text),
-  public.biometric_project_day(uuid, date), public.attendance_external_guard() from public, anon, authenticated;
-revoke all on procedure public.biometric_run_projection(int, int), public.biometric_project_one(uuid, date, uuid)
-  from public, anon, authenticated;
+  public.biometric_project_day(uuid, date, int), public.attendance_external_guard() from public, anon, authenticated;
+revoke all on procedure public.biometric_run_projection(int, int, int, int, int),
+  public.biometric_project_one(uuid, date, uuid, int, int) from public, anon, authenticated;
 revoke all on function public.biometric_hold_next_check(timestamptz) from public, anon, authenticated;
 revoke all on function public.biometric_project_now(uuid, date), public.day_events(uuid, date),
   public.biometric_day_pending(uuid, date), public.attendance_day_sources(date, date, uuid, uuid),
@@ -1453,7 +1639,7 @@ grant execute on function public.biometric_project_now(uuid, date), public.day_e
   public.biometric_day_pending(uuid, date), public.attendance_day_sources(date, date, uuid, uuid),
   public.biometric_shift_gap_warnings(int), public.biometric_retry_day(uuid, date) to authenticated;   -- each checks its own role/scope
 -- NOT in 0012 (hosted, after approval of Q1):
---   select cron.schedule('attendos-biometric-projection', '* * * * *', 'call public.biometric_run_projection(200, 50)');
+--   select cron.schedule('attendos-biometric-projection', '* * * * *', 'call public.biometric_run_projection()');
 ```
 - `deploy/delete_company.sql`: delete `biometric_event_state` → `attendance_coords` → `attendance_events` → the
   other biometric tables (raw events after attendance events).

@@ -308,5 +308,7 @@ changes, provisional time shown separately from final hours, explicit device-dir
 owner decisions Q1–Q10 applied (pg_cron later under separate approval; per-punch acceptance; CSV Source column; Admin
 shift-gap warning). Revision 3 (20 Nov 2026): held punches re-evaluated at any age on a backoff in a separate
 bounded queue budget; a hold released after the 2-day window needs a new individual HR acceptance; company-local dates;
-null-safe authentication gate. Still design only; awaiting final approval before 0012 is written.
+null-safe authentication gate. Revision 4 (20 Nov 2026): held punches that are not due are never touched when
+another punch brings their day in; each employee-day call is limited to 200 writes with continuation marks, and the
+queue has run-level write budgets. Still design only; awaiting final approval before 0012 is written.
 
