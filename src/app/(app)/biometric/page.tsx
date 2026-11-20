@@ -8,13 +8,12 @@ import { DeviceList } from "@/components/biometric/Devices";
 import { MappingScreen } from "@/components/biometric/Mapping";
 import { Overview } from "@/components/biometric/Overview";
 import { ReviewQueue } from "@/components/biometric/ReviewQueue";
-import { DemoBanner, DemoProvider, useDemo } from "@/components/biometric/shared";
+import { BioTabs, DemoBanner, DemoProvider, useDemo } from "@/components/biometric/shared";
 import { SyncActivity } from "@/components/biometric/SyncActivity";
 import { ModulePage } from "@/components/ModulePage";
 import { ErrorState, LoadingState } from "@/components/States";
-import { Tabs } from "@/components/Tabs";
 import { GlassCard } from "@/components/ui";
-import { type Office, type Person, PREVIEW_OFFICES, PREVIEW_PEOPLE, seed } from "@/lib/biometric-mock";
+import { emptyState, type Office, type Person, PREVIEW_OFFICES, PREVIEW_PEOPLE, seed } from "@/lib/biometric-mock";
 import { useSession } from "@/lib/session";
 import { supabase } from "@/lib/supabase";
 import { must, useLoad } from "@/lib/use-load";
@@ -34,7 +33,7 @@ export default function BiometricPage() {
 
 /** People and offices: the company's real records (read-only) when connected; labelled samples in preview mode. */
 function Loader() {
-  const { preview, name, company } = useSession();
+  const { preview, name, company, role } = useSession();
   const { data, error, reload } = useLoad(async () => {
     if (preview) return { people: PREVIEW_PEOPLE, offices: PREVIEW_OFFICES };
     const sb = supabase();
@@ -49,14 +48,14 @@ function Loader() {
   if (error) return <GlassCard><ErrorState title="Couldn't load people and offices" body={error} onRetry={reload} /></GlassCard>;
   if (!data || !initial) return <LoadingState kind="cards" />;
   return (
-    <DemoProvider initial={initial} people={data.people} offices={data.offices} samplePeople={preview} by={`${name} (demonstration)`} tz={company?.timezone ?? "Asia/Kolkata"}>
-      <Biometric samplePeople={preview} />
+    <DemoProvider initial={initial} people={data.people} offices={data.offices} samplePeople={preview} role={role} by={`${name} (demonstration)`} tz={company?.timezone ?? "Asia/Kolkata"}>
+      <Biometric />
     </DemoProvider>
   );
 }
 
-function Biometric({ samplePeople }: { samplePeople: boolean }) {
-  const { state } = useDemo();
+function Biometric() {
+  const { state, apply, people, offices } = useDemo();
   const params = useSearchParams();
   const router = useRouter();
   const path = usePathname();
@@ -73,12 +72,17 @@ function Biometric({ samplePeople }: { samplePeople: boolean }) {
   const setTab = (t: Tab) => go(t === "overview" ? {} : { tab: t });
 
   const open = state.reviews.filter((r) => r.status === "open").length;
-  const unmapped = new Set(state.reviews.filter((r) => r.status === "open" && r.kind === "unmatched").map((r) => r.code)).size;
+  const unmapped = new Set(state.reviews.filter((r) => r.status === "open" && r.kind === "unmatched").map((r) => `${r.raw.deviceId}|${r.raw.code}`)).size;
+  const empty = state.devices.length === 0 && state.agents.length === 0;
+  const reset = (next: typeof state) => {
+    apply({ type: "reset", state: next });
+    go({});
+  };
 
   return (
     <div className="stack">
-      <DemoBanner samplePeople={samplePeople} />
-      <Tabs
+      <DemoBanner empty={empty} onReset={() => reset(seed(people, offices))} onEmpty={() => reset(emptyState())} />
+      <BioTabs
         label="Biometric devices"
         value={tab}
         onChange={setTab}

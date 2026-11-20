@@ -282,4 +282,9 @@ Configuration → Biometric Devices (`/biometric`, Admin + HR, new capability `b
 wizard, device detail, employee mapping, sync activity, review queue. All data is local mock state
 (`src/lib/biometric-mock.ts`) except people and offices, which are read-only real records when connected. No
 migrations, functions, gateway, agent or device connections. Details: docs/biometric/BIOMETRIC_B2_DEVICE_UI.md.
+Review corrections (20 Nov 2026): device-specific code mapping by default with effective dates and attribution by punch
+time; company-wide codes Admin-only with confirmation; conflicts explained before saving; raw punches frozen, decisions
+append-only with reasons; device configuration Admin-only; roles enforced in the reducer (`assertAllowed`), new
+capabilities `manageBiometricDevices`, `mapBiometricCodes`, `mapBiometricCompanyWide`, `reviewBiometric`,
+`retryBiometricSync`; scrollable tab bar on phones. Still no backend. Awaiting owner review.
 

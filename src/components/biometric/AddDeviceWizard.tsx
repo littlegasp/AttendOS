@@ -94,11 +94,10 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
     const newId = `dev-${state.seq + 1}`; // the reducer's id for the next record
     const err = apply({
       type: "addDevice",
-      by,
       device: { name: d.name.trim(), manufacturer: d.manufacturer as Manufacturer, model: d.model.trim(), serial: d.serial, firmware: "", officeId: d.officeId, method: d.method as Method, agentId: needsAgent ? d.agentId : null, direction: d.direction, connection, createdBy: by },
     });
     if (err) return setError(err);
-    toast({ tone: "success", title: `${d.name.trim()} added (demonstration)`, body: "Status: Not connected — no hardware connection is configured." });
+    toast({ tone: "success", title: `${d.name.trim()} added (demonstration — not saved)`, body: "Status: Not connected. No device was contacted and nothing was saved to the database." });
     close();
     onSaved(newId);
   }
@@ -144,7 +143,7 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
 
         {step === 1 ? (
           <div className="form-2">
-            <FormInput label="Device name" required value={d.name} onChange={(e) => set("name", e.target.value)} helper="Where it is, e.g. Main entrance" />
+            <FormInput label="Device name" required maxLength={60} value={d.name} onChange={(e) => set("name", e.target.value)} helper="Where it is, e.g. Main entrance (up to 60 characters)" />
             <div className="field">
               <label htmlFor="bio-model">Model <span className="req" aria-hidden="true">*</span></label>
               <input id="bio-model" className="input" list="bio-models" value={d.model} onChange={(e) => set("model", e.target.value)} />

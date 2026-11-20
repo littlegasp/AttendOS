@@ -29,16 +29,58 @@ adapter, SDK or device connection. Nothing deployed. Branch `feature/biometric-b
 - **People and offices are not invented when connected:** they are read (read-only) from `people_directory` and
   active `locations`; mappings point at real employees by exact id. In preview mode (no database) labelled sample
   people/offices are used.
-- All actions run through one local reducer with the design rules: exact employee id only (never a name match),
-  active employees only, no overlapping mapping for the same code and scope, one company-wide code per person,
-  device-specific mapping wins over company-wide, ending a mapping keeps earlier punches with the same person,
-  dismissing a review item needs a reason, duplicate serials refused. State lives in the browser tab; reload resets it.
+- All actions run through one local reducer (see "Review corrections" below for the rules). State lives in the
+  browser tab; reload or "Reset sample data" restores it; "Show the empty module" shows the first-time screens.
+
+## Review corrections (20 Nov 2026)
+**Mapping scope.** Device-specific is the default: a mapping is `(device, code) → employee` with `validFrom`/`validTo`.
+Codes are not assumed unique — the seed re-uses 101–103 on Main entrance and Plant shop floor for different people.
+Company-wide (`deviceId = null`) is an explicit Admin-only option that needs a confirmation tick. Resolution for a
+punch: the device's own mapping in force at the punch time, otherwise a company-wide mapping in force then, otherwise
+unmatched. Ending a mapping sets `validTo` (reason required, kept in history); earlier punches stay with the same
+person. Code 107 on Main entrance shows a re-used code (former employee, a gap, then a new person); the "Who had this
+code?" card shows the rule for any device, code and moment.
+
+**Conflicts before saving** (`mappingConflicts`, shown live under "Before you save"; Save stays disabled while any
+blocks): *blocks* — empty or invalid code, no employee, employee not in the company, switched-off employee, the same
+code on the same scope in an overlapping period, the same person with a different code on the same device in an
+overlapping period; *notices* — a company-wide mapping this device mapping overrides, devices that keep their own
+mapping over a new company-wide one, a general company-wide warning, waiting punches the mapping will attribute (at
+their original time) and waiting punches earlier than the effective date (stay unmatched).
+
+**Review safeguards.** Raw punches are frozen objects (`RawPunch`) and never edited; decisions only append to the
+item's history (who · role, when, decision, reason). Each kind has its own decisions; a decided item cannot be decided
+again; Accept time as recorded, Dismiss and Not a duplicate need a reason (≥ 5 characters). Every decision dialog
+states its effect. Each item shows employee (name, employee code, device code), device (name, serial), original device
+time (device clock and zone), received time, reason and status.
+
+**Roles.** Capabilities in `src/lib/permissions.ts`: `biometric` (view; Admin, HR), `manageBiometricDevices`
+(Admin), `mapBiometricCodes` (Admin, HR), `mapBiometricCompanyWide` (Admin), `reviewBiometric` (Admin, HR),
+`retryBiometricSync` (Admin, HR). The reducer calls `assertAllowed(role, action)` before every action and throws for
+a role without the capability, so hiding buttons is only a convenience. Manager and Employee get the existing
+permission-denied page and no menu item.
+
+**Demonstration wording.** The banner (with Reset / Show the empty module) stays at the top of every tab; every dialog
+ends with "Demonstration: only this browser tab changes. Nothing is sent to a device or saved to the database."; toasts
+say "demonstration — not saved" / "recorded in this demonstration only".
+
+**Phones.** The tab bar (shared `Tabs`, wrapped in `.bio-tabs`) scrolls sideways with edge fades and a › hint; the
+selected tab is scrolled fully into view without moving the page; `overflow-y: hidden` on the bar so vertical
+scrolling over it scrolls the page (it previously captured a 1-pixel vertical scroll). Long names wrap (`.bio-wrap`);
+device names are limited to 60 characters.
 
 ## Tests
-- `tests/biometric.test.ts` (9): permissions and menu, seed coverage, mapping rules, precedence, review history,
-  device duplicate/serial, and a source scan proving no table writes, no network calls and no hard-coded colours.
-- `e2e/biometric_b2.py` (40 browser checks, local demo stack): access, search/filters/empty state, device detail,
+- `tests/biometric.test.ts` (13): menu and permission matrix; the reducer refusing every action for Manager/Employee
+  and device configuration / company-wide codes for HR; device-specific codes; attribution by punch time (re-used code
+  107); device-over-company-wide precedence with effective dates; conflict blocks and notices; company-wide
+  confirmation; mapping resolving only covered punches with the raw record unchanged; review decisions (valid set,
+  reason, decided once, history appended, raw unchanged); device name/serial; empty module; source scan (no table
+  writes, no network calls, no hard-coded colours).
+- `e2e/biometric_b2.py` (101 browser checks since the corrections; adds HR (b2) limits, conflicts panel,
+  company-wide confirmation, "who had this code", ending a mapping, review context, demonstration wording, empty
+  module and reset, loading and error states, 390-px tab bar (reach every tab, fades, vertical scroll), 70-character
+  employee names and a 60-character device name, other screens still load. Original 40 checks, local demo stack): access, search/filters/empty state, device detail,
   disabled hardware actions, disable confirmation, wizard validation (public IP refused), mapping (no employee → refused,
   overlap refused), sync states, review actions and history, dark/light, phones/tablet without sideways scrolling,
   no console errors, **database unchanged** and **no write requests**.
-- Existing: app checks 44/44 (35 + 9), database 360/360, browser regression 29/29.
+- Existing: app checks 48/48 (35 + 13), database 360/360, browser regression 29/29.

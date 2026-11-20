@@ -36,7 +36,12 @@ export type Capability =
   | "manageLeave"
   | "decideLeave"
   | "exportReports"
-  | "biometric";
+  | "biometric"
+  | "manageBiometricDevices"
+  | "mapBiometricCodes"
+  | "mapBiometricCompanyWide"
+  | "reviewBiometric"
+  | "retryBiometricSync";
 
 export const ROLES: { id: Role; label: string }[] = [
   { id: "admin", label: "Admin" },
@@ -70,7 +75,12 @@ export const MATRIX: Record<Capability, Record<Role, Scope>> = {
   manageLeave: { admin: "all", hr: "all", manager: "none", employee: "none" }, // leave types, balance adjustments, record leave for someone
   decideLeave: { admin: "all", hr: "all", manager: "team", employee: "none" },
   exportReports: { admin: "all", hr: "all", manager: "team", employee: "own" }, // exports follow the same scope as the screen
-  biometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // biometric devices, mappings, sync, review queue (B2: demonstration data only)
+  biometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // open Biometric Devices (B2: demonstration data only)
+  manageBiometricDevices: { admin: "all", hr: "none", manager: "none", employee: "none" }, // add, configure, disable devices (technical setup)
+  mapBiometricCodes: { admin: "all", hr: "all", manager: "none", employee: "none" }, // map / end device-specific employee codes
+  mapBiometricCompanyWide: { admin: "all", hr: "none", manager: "none", employee: "none" }, // company-wide codes: explicit Admin decision
+  reviewBiometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // review-queue decisions
+  retryBiometricSync: { admin: "all", hr: "all", manager: "none", employee: "none" }, // retry failed syncs (from Phase B3–B4)
 };
 
 export function scopeOf(role: Role, cap: Capability): Scope {
@@ -125,4 +135,9 @@ export const CAP_LABEL: Record<Capability, string> = {
   decideLeave: "Approve leave",
   exportReports: "Export reports",
   biometric: "Biometric devices (demonstration)",
+  manageBiometricDevices: "Add / configure / disable biometric devices",
+  mapBiometricCodes: "Map device employee codes (one device)",
+  mapBiometricCompanyWide: "Company-wide device codes",
+  reviewBiometric: "Biometric review decisions",
+  retryBiometricSync: "Retry biometric syncs",
 };

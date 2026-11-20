@@ -41,12 +41,17 @@ Status: **assessment of the proposed design (revision 3). Nothing implemented.**
 ## 5. Who can do what (new capability "Biometric devices")
 | Action | Admin | HR | Manager | Employee |
 |---|---|---|---|---|
-| View overview, devices, sync activity | ✓ | ✓ | — | — |
-| Add/edit/disable devices, test/sync now | ✓ | ✓ | — | — |
+| View overview, devices, sync activity (`biometric`) | ✓ | ✓ | — | — |
+| Add devices, enable/disable, change punch direction (`manageBiometricDevices`) | ✓ | — | — | — |
+| Test connection / sync now / retry failed syncs (`retryBiometricSync`, later phases) | ✓ | ✓ | — | — |
 | Create/revoke/rotate agent keys | ✓ | — | — | — |
-| Map device codes, resolve review queue | ✓ | ✓ (own scope) | — | — |
+| Map and end **device-specific** codes (`mapBiometricCodes`) | ✓ | ✓ (own scope) | — | — |
+| Map and end **company-wide** codes (`mapBiometricCompanyWide`) | ✓ | — | — | — |
+| Resolve review queue (`reviewBiometric`) | ✓ | ✓ (own scope) | — | — |
 | View raw payload (only through `biometric_raw_payload`, each view audited) | ✓ | — | — | — |
 | See punch source in register | per existing register scope | | | |
+Revised 20 Nov 2026 (B2 review corrections): device configuration and company-wide codes are Admin-only. The B2
+reducer enforces this matrix itself (`assertAllowed`), and B3+ database functions must enforce the same capabilities.
 Raw event content is immutable (trigger); HR decisions are separate insert-only review records; projected rows are
 never deleted (voided at most), and slots corrected by HR are locked against projection.
 

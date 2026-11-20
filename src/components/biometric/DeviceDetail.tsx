@@ -13,7 +13,8 @@ import { SyncTable } from "./SyncActivity";
 const CONN_FIELD: Record<string, string> = { deviceIp: "Device IP (LAN)", port: "Device port", receiverPort: "Agent receiver port", pushAuth: "Push authentication", software: "Vendor software", host: "Software host" };
 
 export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
-  const { state, offices, apply, by, tz, now } = useDemo();
+  const { state, offices, apply, tz, now, may } = useDemo();
+  const manage = may("manageBiometricDevices");
   const [confirm, setConfirm] = useState(false);
   const d = state.devices.find((x) => x.id === id);
   if (!d) {
@@ -29,14 +30,15 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
   const runs = state.syncs.filter((r) => r.deviceId === d.id).sort((a, b) => b.started.localeCompare(a.started));
   const errs = state.errors.filter((e) => e.deviceId === d.id).sort((a, b) => b.at.localeCompare(a.at));
   const deviceMappings = state.mappings.filter((m) => m.deviceId === d.id);
-  const companyWide = state.mappings.filter((m) => m.deviceId === null && !m.validTo).length;
+  const nowIso = new Date(now).toISOString();
+  const companyWide = state.mappings.filter((m) => m.deviceId === null && (m.validTo === null || m.validTo > nowIso)).length;
 
   return (
     <div className="stack">
       <button type="button" className="back-link link-btn" onClick={back}>‹ All devices</button>
       <GlassCard className="profile-head-card">
         <div className="ph-main">
-          <h2 className="section-title">{d.name}</h2>
+          <h2 className="section-title bio-wrap">{d.name}</h2>
           <p className="meta">{MANUFACTURER_LABEL[d.manufacturer]} {d.model} · serial <span className="mono">{d.serial}</span></p>
           <div className="ph-badges">
             <ConnBadge conn={connOf(d)} />
@@ -44,15 +46,17 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
           </div>
         </div>
         <div className="ph-actions">
-          <NotYet label="Test connection" phase="B4" />
-          <NotYet label="Sync now" phase="B4" />
-          <Button variant={d.disabled ? "secondary" : "danger"} size="sm" onClick={() => {
-              if (!d.disabled) return setConfirm(true);
-              apply({ type: "setDisabled", deviceId: d.id, disabled: false, by });
-              toast({ tone: "success", title: `${d.name} enabled (demonstration)` });
-            }}>
-            {d.disabled ? "Enable device" : "Disable device"}
-          </Button>
+          {may("retryBiometricSync") ? <><NotYet label="Test connection" phase="B4" /><NotYet label="Sync now" phase="B4" /></> : null}
+          {manage ? (
+            <Button variant={d.disabled ? "secondary" : "danger"} size="sm" onClick={() => {
+                if (!d.disabled) return setConfirm(true);
+                const err = apply({ type: "setDisabled", deviceId: d.id, disabled: false });
+                if (err) return toast({ tone: "danger", title: "Not allowed", body: err });
+                toast({ tone: "success", title: `${d.name} enabled (demonstration — not saved)`, body: "No device was contacted." });
+              }}>
+              {d.disabled ? "Enable device" : "Disable device"}
+            </Button>
+          ) : null}
         </div>
       </GlassCard>
 
@@ -98,6 +102,7 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
           )}
         </SectionCard>
         <SectionCard title="Mapping configuration">
+          {manage ? (
           <div className="field">
             <label htmlFor="bio-dir">Punch direction</label>
             <select
@@ -105,14 +110,18 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
               className="input"
               value={d.direction}
               onChange={(e) => {
-                apply({ type: "setDirection", deviceId: d.id, direction: e.target.value as DirectionMode, by });
-                toast({ tone: "success", title: "Direction mode changed (demonstration)" });
+                const err = apply({ type: "setDirection", deviceId: d.id, direction: e.target.value as DirectionMode });
+                if (err) return toast({ tone: "danger", title: "Not allowed", body: err });
+                toast({ tone: "success", title: "Direction mode changed (demonstration — not saved)", body: "No device or database setting changed." });
               }}
             >
               {(Object.keys(DIRECTION_LABEL) as DirectionMode[]).map((k) => <option key={k} value={k}>{DIRECTION_LABEL[k]}</option>)}
             </select>
             <p className="field-msg">{d.direction === "device" ? "Use only when staff actually press In / Out / Break on the device." : "First punch of the day = in; last punch = out after the day closes; others shown as extra punches."}</p>
           </div>
+          ) : (
+            <dl className="rules-view"><dt>Punch direction</dt><dd>{DIRECTION_LABEL[d.direction]} <span className="meta">(changed by Admin)</span></dd></dl>
+          )}
           <p className="meta">{companyWide} company-wide codes apply to this device. Device-specific codes below take precedence.</p>
           <MappingTable rows={deviceMappings} showScope={false} />
         </SectionCard>
@@ -145,9 +154,10 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
         danger
         onCancel={() => setConfirm(false)}
         onConfirm={() => {
-          apply({ type: "setDisabled", deviceId: d.id, disabled: true, by });
+          const err = apply({ type: "setDisabled", deviceId: d.id, disabled: true });
           setConfirm(false);
-          toast({ tone: "success", title: `${d.name} disabled (demonstration)` });
+          if (err) return toast({ tone: "danger", title: "Not allowed", body: err });
+          toast({ tone: "success", title: `${d.name} disabled (demonstration — not saved)`, body: "No device was contacted." });
         }}
       />
     </div>

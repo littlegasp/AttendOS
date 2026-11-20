@@ -2,108 +2,210 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DemoRuleError, PREVIEW_OFFICES, PREVIEW_PEOPLE, reducer, resolveMapping, seed, type Action, type DemoState } from "../src/lib/biometric-mock";
+import {
+  assertAllowed, DECISION, DECISIONS_FOR, DemoRuleError, emptyState, mappingConflicts, PREVIEW_OFFICES, PREVIEW_PEOPLE, reducer, resolveMapping, reviewEmployee, seed,
+  type Action, type DemoState,
+} from "../src/lib/biometric-mock";
 import { navFor } from "../src/lib/nav";
-import { can } from "../src/lib/permissions";
+import { can, type Role } from "../src/lib/permissions";
+import type { DemoAction } from "../src/components/biometric/shared";
 
 const people = PREVIEW_PEOPLE;
-const run = (s: DemoState, a: Action) => reducer(people)(s, a);
-const fresh = () => seed(people, PREVIEW_OFFICES, Date.parse("2026-11-20T06:00:00Z"));
-const by = "Test HR";
+const NOW = Date.parse("2026-11-20T06:00:00Z");
+const nowIso = new Date(NOW).toISOString();
+const run = (s: DemoState, a: Action) => reducer(people, () => nowIso)(s, a);
+const fresh = () => seed(people, PREVIEW_OFFICES, NOW);
+const active = people.filter((p) => p.active).sort((a, b) => (a.emp_code ?? "").localeCompare(b.emp_code ?? ""));
+const leaver = people.find((p) => !p.active)!;
+const DAY = 86_400_000;
+const daysAgo = (d: number) => new Date(NOW - d * DAY).toISOString();
+const as = (role: Role) => ({ role, by: `Test ${role}` });
+const ROLES: Role[] = ["admin", "hr", "manager", "employee"];
 
 test("only Admin and HR see Biometric Devices", () => {
-  assert.ok(can("admin", "biometric"));
-  assert.ok(can("hr", "biometric"));
-  assert.equal(can("manager", "biometric"), false);
-  assert.equal(can("employee", "biometric"), false);
-  const has = (r: "admin" | "hr" | "manager" | "employee") => navFor(r).some((g) => g.items.some((i) => i.href === "/biometric"));
+  assert.ok(can("admin", "biometric") && can("hr", "biometric"));
+  assert.equal(can("manager", "biometric") || can("employee", "biometric"), false);
+  const has = (r: Role) => navFor(r).some((g) => g.items.some((i) => i.href === "/biometric"));
   assert.ok(has("admin") && has("hr"));
   assert.equal(has("manager") || has("employee"), false);
   assert.equal(navFor("admin").find((g) => g.items.some((i) => i.href === "/biometric"))?.label, "Configuration");
 });
 
-test("seed covers every manufacturer, agent state, sync outcome and review type", () => {
-  const s = fresh();
-  for (const m of ["zkteco", "essl", "matrix"]) assert.ok(s.devices.some((d) => d.manufacturer === m), m);
-  assert.deepEqual(new Set(s.agents.map((a) => a.status)), new Set(["online", "offline"]));
-  for (const st of ["ok", "partial", "failed", "retrying"]) assert.ok(s.syncs.some((r) => r.status === st), st);
-  for (const k of ["unmatched", "ambiguous", "possible_duplicate", "after_correction", "timestamp"]) assert.ok(s.reviews.some((r) => r.kind === k), k);
-  assert.ok(s.syncs.some((r) => r.confirmedDup > 0) && s.syncs.some((r) => r.possibleDup > 0));
-  // Every seeded mapping points at a real person by exact id.
-  for (const m of s.mappings) assert.ok(people.some((p) => p.id === m.employeeId));
+test("permission matrix: device configuration and company-wide codes are Admin-only", () => {
+  const expect: Record<string, Role[]> = {
+    manageBiometricDevices: ["admin"],
+    mapBiometricCompanyWide: ["admin"],
+    mapBiometricCodes: ["admin", "hr"],
+    reviewBiometric: ["admin", "hr"],
+    retryBiometricSync: ["admin", "hr"],
+  };
+  for (const [cap, roles] of Object.entries(expect)) {
+    for (const r of ROLES) assert.equal(can(r, cap as Parameters<typeof can>[1]), roles.includes(r), `${r} ${cap}`);
+  }
 });
 
-test("mapping needs an exact, active employee — never a name match", () => {
+test("the reducer enforces roles itself — not only the interface", () => {
   const s = fresh();
-  assert.throws(() => run(s, { type: "addMapping", code: "300", deviceId: null, employeeId: "Aarav Sharma (sample)", by }), DemoRuleError);
-  const leaver = people.find((p) => !p.active)!;
-  assert.throws(() => run(s, { type: "addMapping", code: "300", deviceId: null, employeeId: leaver.id, by }), /switched off/);
-  assert.throws(() => run(s, { type: "addMapping", code: "  ", deviceId: null, employeeId: people[9]!.id, by }), DemoRuleError);
+  const device = { name: "Lobby", manufacturer: "zkteco" as const, model: "MB160", serial: "NEW1", firmware: "", officeId: null, method: "sdk_pull" as const, agentId: "agt-1", direction: "first_last" as const, connection: {}, createdBy: "x" };
+  const open = s.reviews.find((r) => r.status === "open" && r.kind === "possible_duplicate")!;
+  const actions: DemoAction[] = [
+    { type: "addDevice", device },
+    { type: "setDisabled", deviceId: "dev-1", disabled: true },
+    { type: "setDirection", deviceId: "dev-1", direction: "device" },
+    { type: "addMapping", code: "900", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso },
+    { type: "endMapping", mappingId: "map-1", at: nowIso, reason: "Test reason" },
+    { type: "review", reviewId: open.id, decision: "confirm_duplicate", note: "" },
+  ];
+  for (const r of ["manager", "employee"] as Role[]) {
+    for (const a of actions) assert.throws(() => run(s, { ...a, ...as(r) } as Action), DemoRuleError, `${r} ${a.type}`);
+    assert.throws(() => run(s, { type: "reset", role: r, state: emptyState() }), DemoRuleError);
+  }
+  // HR: cannot configure devices or map company-wide; can map device codes and review.
+  for (const a of actions.slice(0, 3)) assert.throws(() => run(s, { ...a, ...as("hr") } as Action), /HR users cannot/);
+  assert.throws(() => run(s, { type: "addMapping", code: "900", deviceId: null, employeeId: active[9]!.id, validFrom: nowIso, confirmCompanyWide: true, ...as("hr") }), /Admin decision/);
+  const cw = s.mappings.find((m) => m.deviceId === null)!;
+  assert.throws(() => run(s, { type: "endMapping", mappingId: cw.id, at: nowIso, reason: "Test reason", ...as("hr") }), /Admin decision/);
+  assert.doesNotThrow(() => run(s, { ...actions[3]!, ...as("hr") } as Action));
+  assert.doesNotThrow(() => run(s, { ...actions[5]!, ...as("hr") } as Action));
+  // Admin can do everything.
+  for (const a of actions) assert.doesNotThrow(() => run(s, { ...a, ...as("admin") } as Action), a.type);
+  assert.throws(() => assertAllowed("employee", { type: "reset", role: "employee", state: s }), /Employee users cannot/);
 });
 
-test("no overlapping mappings for the same code and scope; one company-wide code per person", () => {
+test("codes are device-specific: the same code means different people on different devices", () => {
   const s = fresh();
-  const taken = s.mappings.find((m) => m.deviceId === null && !m.validTo)!;
-  assert.throws(() => run(s, { type: "addMapping", code: taken.code, deviceId: null, employeeId: people[9]!.id, by }), /already has a company-wide mapping/);
-  assert.throws(() => run(s, { type: "addMapping", code: "777", deviceId: null, employeeId: taken.employeeId, by }), /already has a company-wide code/);
-  // The same code on one device only is allowed (device-specific override).
-  const s2 = run(s, { type: "addMapping", code: taken.code, deviceId: "dev-1", employeeId: people[9]!.id, by });
-  const now = new Date().toISOString();
-  assert.equal(resolveMapping(s2, "dev-1", taken.code, now)?.employeeId, people[9]!.id, "device-specific wins");
-  assert.equal(resolveMapping(s2, "dev-2", taken.code, now)?.employeeId, taken.employeeId, "company-wide elsewhere");
+  const a = resolveMapping(s, "dev-1", "101", nowIso)!;
+  const b = resolveMapping(s, "dev-3", "101", nowIso)!;
+  assert.notEqual(a.employeeId, b.employeeId);
+  assert.equal(resolveMapping(s, "dev-2", "101", nowIso), null, "a code mapped on other devices is not assumed here");
+  assert.ok(s.mappings.filter((m) => m.deviceId === null).length === 1, "only one explicit company-wide mapping");
 });
 
-test("mapping an unmatched code resolves its review items and records history", () => {
+test("historical punches keep the mapping in force at the punch time", () => {
   const s = fresh();
-  const s2 = run(s, { type: "addMapping", code: "117", deviceId: null, employeeId: people[9]!.id, by });
-  const item = s2.reviews.find((r) => r.code === "117")!;
+  assert.equal(resolveMapping(s, "dev-1", "107", daysAgo(100))!.employeeId, leaver.id, "before the re-use: the leaver");
+  assert.equal(resolveMapping(s, "dev-1", "107", daysAgo(40)), null, "gap between the two mappings: unmatched");
+  assert.equal(resolveMapping(s, "dev-1", "107", daysAgo(1))!.employeeId, active[6]!.id, "after the re-use: the new person");
+  // Ending a mapping never moves earlier punches.
+  const m = resolveMapping(s, "dev-1", "101", daysAgo(1))!;
+  const s2 = run(s, { type: "endMapping", mappingId: m.id, at: nowIso, reason: "Changed devices", ...as("hr") });
+  assert.equal(resolveMapping(s2, "dev-1", "101", daysAgo(1))!.employeeId, m.employeeId);
+  assert.equal(resolveMapping(s2, "dev-1", "101", new Date(NOW + DAY).toISOString()), null);
+  assert.equal(s2.mappingHistory[0]!.reason, "Changed devices");
+  assert.throws(() => run(s, { type: "endMapping", mappingId: m.id, at: nowIso, reason: "no", ...as("hr") }), /reason/);
+  assert.throws(() => run(s, { type: "endMapping", mappingId: m.id, at: daysAgo(400), reason: "Too early", ...as("hr") }), /after the mapping started/);
+});
+
+test("device mapping takes precedence over company-wide", () => {
+  const s = fresh();
+  const cw = s.mappings.find((m) => m.deviceId === null)!;
+  assert.equal(resolveMapping(s, "dev-2", cw.code, nowIso)!.id, cw.id, "company-wide applies where the device has none");
+  const s2 = run(s, { type: "addMapping", code: cw.code, deviceId: "dev-2", employeeId: active[8]!.id, validFrom: daysAgo(1), ...as("hr") });
+  assert.equal(resolveMapping(s2, "dev-2", cw.code, nowIso)!.employeeId, active[8]!.id);
+  assert.equal(resolveMapping(s2, "dev-1", cw.code, nowIso)!.id, cw.id);
+  assert.equal(resolveMapping(s2, "dev-2", cw.code, daysAgo(5))!.id, cw.id, "before the device mapping took effect");
+});
+
+test("conflicts are explained before saving: blocks and notices", () => {
+  const s = fresh();
+  const blocks = (d: Parameters<typeof mappingConflicts>[2]) => mappingConflicts(s, people, d).filter((c) => c.level === "block").map((c) => c.text);
+  const notices = (d: Parameters<typeof mappingConflicts>[2]) => mappingConflicts(s, people, d).filter((c) => c.level === "notice").map((c) => c.text);
+  const taken = resolveMapping(s, "dev-1", "101", nowIso)!;
+  assert.match(blocks({ code: "101", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso }).join(), /already mapped/);
+  assert.match(blocks({ code: "999", deviceId: "dev-1", employeeId: taken.employeeId, validFrom: nowIso }).join(), /already has code 101/);
+  assert.match(blocks({ code: "999", deviceId: "dev-1", employeeId: leaver.id, validFrom: nowIso }).join(), /switched off/);
+  assert.match(blocks({ code: "", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso }).join(), /Enter the employee code/);
+  assert.match(blocks({ code: "a b", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso }).join(), /letters, digits/);
+  assert.match(blocks({ code: "999", deviceId: "dev-1", employeeId: "Aarav Sharma (sample)", validFrom: nowIso }).join(), /not in this company/, "never a name match");
+  // Same code on a different device is fine.
+  assert.deepEqual(blocks({ code: "101", deviceId: "dev-2", employeeId: active[9]!.id, validFrom: nowIso }), []);
+  // Company-wide: warns about devices that keep their own mapping.
+  const n = notices({ code: "101", deviceId: null, employeeId: active[9]!.id, validFrom: nowIso }).join(" ");
+  assert.match(n, /Main entrance.*keeps precedence/);
+  assert.match(n, /Plant shop floor/);
+  assert.match(n, /every device without its own mapping/);
+  // Waiting punches: covered vs earlier than the effective date.
+  const r = s.reviews.find((x) => x.raw.code === "117")!;
+  assert.match(notices({ code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: r.raw.punchAt }).join(), /1 waiting punch .* original time/);
+  assert.match(notices({ code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso }).join(), /earlier than the effective date/);
+});
+
+test("company-wide mapping needs an explicit Admin confirmation", () => {
+  const s = fresh();
+  const d = { type: "addMapping" as const, code: "C9000", deviceId: null, employeeId: active[8]!.id, validFrom: nowIso, ...as("admin") };
+  assert.throws(() => run(s, d), /Confirm that this code/);
+  const s2 = run(s, { ...d, confirmCompanyWide: true });
+  assert.equal(s2.mappings.at(-1)!.deviceId, null);
+});
+
+test("mapping an unmatched code resolves only the punches it covers, at their original time", () => {
+  const s = fresh();
+  const before = s.reviews.find((r) => r.raw.code === "117")!;
+  // Effective after the punch: the item stays unmatched.
+  const late = run(s, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: nowIso, ...as("hr") });
+  assert.equal(late.reviews.find((r) => r.id === before.id)!.status, "open");
+  // Mapping on another device does not touch it.
+  const other = run(s, { type: "addMapping", code: "117", deviceId: "dev-2", employeeId: active[9]!.id, validFrom: daysAgo(1), ...as("hr") });
+  assert.equal(other.reviews.find((r) => r.id === before.id)!.status, "open");
+  const s2 = run(s, { type: "addMapping", code: "117", deviceId: "dev-1", employeeId: active[9]!.id, validFrom: before.raw.punchAt, ...as("hr") });
+  const item = s2.reviews.find((r) => r.id === before.id)!;
   assert.equal(item.status, "resolved");
-  assert.equal(item.employeeId, people[9]!.id);
-  assert.match(item.history.at(-1)!.action, /Mapped 117/);
-  assert.equal(s2.mappingHistory[0]!.code, "117");
-  assert.equal(item.deviceLocalTime, s.reviews.find((r) => r.code === "117")!.deviceLocalTime, "original punch time unchanged");
+  assert.equal(reviewEmployee(s2, item)!.employeeId, active[9]!.id);
+  assert.deepEqual(item.raw, before.raw, "raw device record unchanged");
+  assert.equal(item.history.length, before.history.length + 1);
+  assert.match(item.history.at(-1)!.by, /Test hr · HR/);
 });
 
-test("ending a mapping keeps its history and validity window", () => {
+test("review decisions: only valid ones, reason where required, raw never modified, decided once", () => {
   const s = fresh();
-  const m = s.mappings.find((x) => !x.validTo)!;
-  const s2 = run(s, { type: "endMapping", mappingId: m.id, by });
-  const ended = s2.mappings.find((x) => x.id === m.id)!;
-  assert.ok(ended.validTo);
-  assert.equal(ended.employeeId, m.employeeId);
-  assert.match(s2.mappingHistory[0]!.action, /ended/);
-});
-
-test("review decisions are appended, dismissal needs a reason", () => {
-  const s = fresh();
+  for (const [kind, ds] of Object.entries(DECISIONS_FOR)) assert.ok(ds.length > 0, kind);
+  for (const d of ["accept_time", "dismiss", "not_duplicate"] as const) assert.ok(DECISION[d].reasonRequired, d);
   const r = s.reviews.find((x) => x.status === "open" && x.kind === "timestamp")!;
-  assert.throws(() => run(s, { type: "review", reviewId: r.id, action: "dismiss", note: "no", by }), /reason/);
-  const s2 = run(s, { type: "review", reviewId: r.id, action: "dismiss", note: "Device clock was wrong", by });
+  const rawBefore = structuredClone(r.raw);
+  assert.ok(Object.isFrozen(r.raw), "raw punch is frozen");
+  assert.throws(() => run(s, { type: "review", reviewId: r.id, decision: "confirm_duplicate", note: "", ...as("hr") }), /does not apply/);
+  assert.throws(() => run(s, { type: "review", reviewId: r.id, decision: "dismiss", note: "no", ...as("hr") }), /reason is required/);
+  const s2 = run(s, { type: "review", reviewId: r.id, decision: "dismiss", note: "Device clock was wrong", ...as("hr") });
   const after = s2.reviews.find((x) => x.id === r.id)!;
   assert.equal(after.status, "dismissed");
-  assert.equal(after.history.length, r.history.length + 1);
-  assert.equal(after.deviceLocalTime, r.deviceLocalTime);
+  assert.deepEqual(after.raw, rawBefore);
+  assert.deepEqual(after.history.slice(0, -1), r.history, "earlier history kept");
+  const last = after.history.at(-1)!;
+  assert.equal(last.action, "Dismiss");
+  assert.equal(last.note, "Device clock was wrong");
+  assert.equal(last.at, nowIso);
+  assert.match(last.by, /HR$/);
+  assert.throws(() => run(s2, { type: "review", reviewId: r.id, decision: "accept_time", note: "Second try", ...as("admin") }), /already been decided/);
+  // Optional note: confirm duplicate works without one.
+  const dup = s.reviews.find((x) => x.status === "open" && x.kind === "possible_duplicate")!;
+  assert.equal(run(s, { type: "review", reviewId: dup.id, decision: "confirm_duplicate", note: "", ...as("hr") }).reviews.find((x) => x.id === dup.id)!.status, "resolved");
 });
 
-test("adding a device refuses a duplicate serial and starts as Not connected", () => {
+test("adding a device: name length, duplicate serial, starts Not connected", () => {
   const s = fresh();
-  const base = { name: "Lobby", manufacturer: "zkteco" as const, model: "MB160", serial: "NEW12345", firmware: "", officeId: PREVIEW_OFFICES[0]!.id, method: "sdk_pull" as const, agentId: "agt-1", direction: "first_last" as const, connection: { deviceIp: "192.168.1.5", port: "4370" }, createdBy: by };
-  const s2 = run(s, { type: "addDevice", device: base, by });
+  const base = { name: "Lobby", manufacturer: "zkteco" as const, model: "MB160", serial: "NEW12345", firmware: "", officeId: PREVIEW_OFFICES[0]!.id, method: "sdk_pull" as const, agentId: "agt-1", direction: "first_last" as const, connection: { deviceIp: "192.168.1.5", port: "4370" }, createdBy: "x" };
+  const s2 = run(s, { type: "addDevice", device: base, ...as("admin") });
   const d = s2.devices.at(-1)!;
   assert.equal(d.conn, "never");
   assert.equal(d.lastSync, null);
-  assert.throws(() => run(s2, { type: "addDevice", device: { ...base, serial: "new12345" }, by }), /already registered/);
+  assert.throws(() => run(s2, { type: "addDevice", device: { ...base, serial: "new12345" }, ...as("admin") }), /already registered/);
+  assert.throws(() => run(s, { type: "addDevice", device: { ...base, name: "x".repeat(61) }, ...as("admin") }), /1–60/);
+});
+
+test("reset and empty module", () => {
+  const s = run(fresh(), { type: "reset", state: emptyState(), role: "hr" });
+  assert.equal(s.devices.length + s.mappings.length + s.reviews.length, 0);
 });
 
 test("the biometric module makes no database writes and no device connections", () => {
   const dir = join(__dirname, "../src/components/biometric");
-  const files = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).concat(readFileSync(join(__dirname, "../src/app/(app)/biometric/page.tsx"), "utf8"), readFileSync(join(__dirname, "../src/lib/biometric-mock.ts"), "utf8"));
+  const page = readFileSync(join(__dirname, "../src/app/(app)/biometric/page.tsx"), "utf8");
+  const files = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).concat(page, readFileSync(join(__dirname, "../src/lib/biometric-mock.ts"), "utf8"));
   for (const src of files) {
     assert.equal(/\.(insert|update|upsert|delete)\(/.test(src), false, "no table writes");
-    assert.equal(/fetch\(|WebSocket|XMLHttpRequest/.test(src), false, "no network calls");
+    assert.equal(/fetch\(|WebSocket|XMLHttpRequest|EventSource/.test(src), false, "no network calls");
     assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(src), false, "no hard-coded colours");
   }
-  const page = files.at(-2)!;
   const rpcs = [...page.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]);
   assert.deepEqual(rpcs, ["people_directory"], "only the read-only people list");
 });

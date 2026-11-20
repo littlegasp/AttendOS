@@ -4,32 +4,25 @@ import { useState } from "react";
 import { Modal } from "@/components/Modal";
 import { EmptyState } from "@/components/States";
 import { Button, FormTextarea, GlassCard, StatusBadge } from "@/components/ui";
-import { REVIEW_LABEL, type ReviewItem, type ReviewKind } from "@/lib/biometric-mock";
+import { DECISION, type Decision, DECISIONS_FOR, REVIEW_LABEL, type ReviewItem, type ReviewKind, reviewEmployee } from "@/lib/biometric-mock";
 import { toast } from "@/lib/toast";
 import { MappingForm } from "./Mapping";
-import { fmtTime, useDemo } from "./shared";
+import { DemoNote, fmtTime, useDemo } from "./shared";
 
-type Act = "accept" | "dismiss" | "confirm_duplicate" | "not_duplicate" | "keep_correction";
-
-const ACTIONS: Record<ReviewKind, { act: Act; label: string; primary?: boolean }[]> = {
-  unmatched: [{ act: "dismiss", label: "Dismiss" }],
-  ambiguous: [{ act: "accept", label: "Keep as extra punch", primary: true }, { act: "dismiss", label: "Dismiss" }],
-  possible_duplicate: [{ act: "confirm_duplicate", label: "Confirm duplicate", primary: true }, { act: "not_duplicate", label: "Not a duplicate" }],
-  after_correction: [{ act: "keep_correction", label: "Keep HR correction", primary: true }, { act: "dismiss", label: "Dismiss" }],
-  timestamp: [{ act: "accept", label: "Accept time as recorded" }, { act: "dismiss", label: "Dismiss", primary: true }],
-};
+const STATUS_TEXT: Record<ReviewItem["status"], string> = { open: "Waiting for review", resolved: "Resolved", dismissed: "Dismissed" };
 
 export function ReviewQueue() {
-  const { state, people, tz } = useDemo();
+  const { state, people, tz, may } = useDemo();
   const [kind, setKind] = useState("");
   const [status, setStatus] = useState<"open" | "closed">("open");
-  const [act, setAct] = useState<{ item: ReviewItem; act: Act; label: string } | null>(null);
+  const [act, setAct] = useState<{ item: ReviewItem; decision: Decision } | null>(null);
   const [mapFor, setMapFor] = useState<ReviewItem | null>(null);
   const [history, setHistory] = useState<ReviewItem | null>(null);
   const rows = state.reviews
     .filter((r) => (status === "open" ? r.status === "open" : r.status !== "open") && (!kind || r.kind === kind))
-    .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+    .sort((a, b) => b.raw.receivedAt.localeCompare(a.raw.receivedAt));
   const counts = Object.fromEntries((Object.keys(REVIEW_LABEL) as ReviewKind[]).map((k) => [k, state.reviews.filter((r) => r.kind === k && r.status === "open").length]));
+  const decide = may("reviewBiometric");
 
   return (
     <GlassCard className="stack">
@@ -49,37 +42,42 @@ export function ReviewQueue() {
           </select>
         </label>
       </div>
-      <p className="meta">Original punch times are kept exactly as the device recorded them. Decisions are added to each item’s history; the device record itself is never edited.</p>
+      <p className="meta">
+        <strong>Original device time</strong> is what the device recorded (its own clock). <strong>Received</strong> is when AttendOS got it. The device record is never edited;
+        each decision is added to the item&rsquo;s history.
+      </p>
 
       {rows.length === 0 ? (
         <EmptyState title={status === "open" ? "Nothing waiting for review" : "No closed items"} body="Punches that cannot be counted automatically appear here for HR." />
       ) : (
         <ul className="bio-review">
           {rows.map((r) => {
-            const d = state.devices.find((x) => x.id === r.deviceId);
-            const p = people.find((x) => x.id === r.employeeId);
+            const d = state.devices.find((x) => x.id === r.raw.deviceId);
+            const m = reviewEmployee(state, r);
+            const p = m ? people.find((x) => x.id === m.employeeId) : null;
             return (
-              <li key={r.id} className="bio-review-item">
+              <li key={r.id} className="bio-review-item" data-review={r.id}>
                 <div className="bio-review-main">
                   <div className="bio-review-head">
                     <span className={`badge tone-${r.kind === "timestamp" || r.kind === "unmatched" ? "warning" : "info"}`}><span className="badge-dot" aria-hidden="true" />{REVIEW_LABEL[r.kind]}</span>
-                    {r.status === "open" ? null : <StatusBadge status={r.status === "resolved" ? "approved" : "rejected"} label={r.status === "resolved" ? "Resolved" : "Dismissed"} />}
+                    <StatusBadge status={r.status === "open" ? "pending" : r.status === "resolved" ? "approved" : "rejected"} label={STATUS_TEXT[r.status]} />
                   </div>
                   <dl className="rules-view compact">
-                    <dt>Original punch time</dt><dd className="mono">{r.deviceLocalTime} <span className="meta">(device clock)</span></dd>
-                    <dt>Device</dt><dd>{d?.name ?? "—"}</dd>
-                    <dt>Employee code</dt><dd className="mono">{r.code}</dd>
-                    <dt>Employee</dt><dd>{p ? p.full_name : <span className="muted">Not mapped</span>}</dd>
-                    <dt>Received</dt><dd>{fmtTime(r.receivedAt, tz)}</dd>
-                    <dt>Reason</dt><dd>{r.detail}</dd>
+                    <dt>Employee</dt>
+                    <dd className="bio-wrap">{p ? <>{p.full_name}{p.emp_code ? <span className="muted"> · {p.emp_code}</span> : null}</> : <span className="muted">Not mapped on this device</span>} · device code <span className="mono">{r.raw.code}</span></dd>
+                    <dt>Device</dt><dd className="bio-wrap">{d?.name ?? "Removed device"} · serial <span className="mono">{r.raw.deviceSerial}</span></dd>
+                    <dt>Original device time</dt><dd><span className="mono">{r.raw.deviceLocalTime}</span> <span className="meta">device clock, {r.raw.deviceTimezone}</span></dd>
+                    <dt>Received</dt><dd>{fmtTime(r.raw.receivedAt, tz)} <span className="meta">by AttendOS</span></dd>
+                    <dt>Reason for review</dt><dd>{r.reason}</dd>
+                    <dt>Status</dt><dd>{STATUS_TEXT[r.status]}{r.status !== "open" ? ` — ${r.history.at(-1)?.action} by ${r.history.at(-1)?.by}` : ""}</dd>
                   </dl>
                 </div>
                 <div className="bio-review-actions">
-                  {r.status === "open" ? (
+                  {r.status === "open" && decide ? (
                     <>
-                      {r.kind === "unmatched" ? <Button size="sm" variant="primary" onClick={() => setMapFor(r)}>Map employee</Button> : null}
-                      {ACTIONS[r.kind].map((a) => (
-                        <Button key={a.act} size="sm" variant={a.primary ? "primary" : "secondary"} onClick={() => setAct({ item: r, act: a.act, label: a.label })}>{a.label}</Button>
+                      {r.kind === "unmatched" && may("mapBiometricCodes") ? <Button size="sm" variant="primary" onClick={() => setMapFor(r)}>Map employee</Button> : null}
+                      {DECISIONS_FOR[r.kind].map((dec, i) => (
+                        <Button key={dec} size="sm" variant={i === 0 && r.kind !== "unmatched" ? "primary" : "secondary"} onClick={() => setAct({ item: r, decision: dec })}>{DECISION[dec].label}</Button>
                       ))}
                     </>
                   ) : null}
@@ -91,9 +89,9 @@ export function ReviewQueue() {
         </ul>
       )}
 
-      {act ? <ActDialog {...act} onClose={() => setAct(null)} /> : null}
-      {mapFor ? <MappingForm open onClose={() => setMapFor(null)} code={mapFor.code} deviceId={mapFor.deviceId} reviewId={mapFor.id} /> : null}
-      <Modal open={history !== null} title="Review history" subtitle={history ? `${REVIEW_LABEL[history.kind]} · code ${history.code}` : undefined} onClose={() => setHistory(null)}>
+      {act ? <DecisionDialog {...act} onClose={() => setAct(null)} /> : null}
+      {mapFor ? <MappingForm open onClose={() => setMapFor(null)} code={mapFor.raw.code} deviceId={mapFor.raw.deviceId} validFrom={mapFor.raw.punchAt} /> : null}
+      <Modal open={history !== null} title="Review history" subtitle={history ? `${REVIEW_LABEL[history.kind]} · code ${history.raw.code} · ${history.raw.deviceLocalTime}` : undefined} onClose={() => setHistory(null)}>
         {history ? (
           <ul className="audit-list bio-log">
             {(state.reviews.find((x) => x.id === history.id) ?? history).history.map((h, i) => (
@@ -104,32 +102,38 @@ export function ReviewQueue() {
             ))}
           </ul>
         ) : null}
+        <DemoNote />
       </Modal>
     </GlassCard>
   );
 }
 
-function ActDialog({ item, act, label, onClose }: { item: ReviewItem; act: Act; label: string; onClose: () => void }) {
-  const { apply, by } = useDemo();
+function DecisionDialog({ item, decision, onClose }: { item: ReviewItem; decision: Decision; onClose: () => void }) {
+  const { apply, state, people } = useDemo();
+  const d = DECISION[decision];
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const m = reviewEmployee(state, item);
+  const p = m ? people.find((x) => x.id === m.employeeId) : null;
   return (
-    <Modal open title={label} subtitle={`${REVIEW_LABEL[item.kind]} · code ${item.code} · ${item.deviceLocalTime}`} onClose={onClose}>
+    <Modal open title={d.label} subtitle={`${REVIEW_LABEL[item.kind]} · ${p?.full_name ?? `code ${item.raw.code}`} · ${item.raw.deviceLocalTime}`} onClose={onClose}>
       <form
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
-          const err = apply({ type: "review", reviewId: item.id, action: act, note, by });
+          const err = apply({ type: "review", reviewId: item.id, decision, note });
           if (err) return setError(err);
-          toast({ tone: "success", title: `${label} (demonstration)`, body: "Added to the item's history." });
+          toast({ tone: "success", title: `${d.label} — recorded in this demonstration only`, body: "Added to the item's history. Nothing was saved to the database." });
           onClose();
         }}
       >
-        <FormTextarea label={act === "dismiss" ? "Reason" : "Note (optional)"} required={act === "dismiss"} value={note} onChange={(e) => setNote(e.target.value)} rows={3} helper="Kept in the review history with your name and the time." />
+        <div className="alert warning" role="note"><p>{d.effect}</p></div>
+        <FormTextarea label={d.reasonRequired ? "Reason" : "Note (optional)"} required={d.reasonRequired} minLength={d.reasonRequired ? 5 : undefined} value={note} onChange={(e) => setNote(e.target.value)} rows={3} helper="Kept in the review history with your name, role and the time. The original device record is not changed." />
         {error ? <div className="alert danger" role="alert"><p>{error}</p></div> : null}
+        <DemoNote />
         <div className="dialog-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary">{label}</Button>
+          <Button type="submit" variant={decision === "dismiss" ? "danger" : "primary"}>{d.label}</Button>
         </div>
       </form>
     </Modal>

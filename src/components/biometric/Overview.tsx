@@ -1,12 +1,13 @@
 "use client";
 
-import { MetricCard, SectionCard } from "@/components/ui";
+import { EmptyState } from "@/components/States";
+import { Button, GlassCard, MetricCard, SectionCard } from "@/components/ui";
 import { needsAttention } from "@/lib/biometric-mock";
 import { ago, fmtTime, useDemo } from "./shared";
 import { SyncTable } from "./SyncActivity";
 
 export function Overview({ openDevice, goto }: { openDevice: (id: string) => void; goto: (tab: "devices" | "sync" | "review") => void }) {
-  const { state, now, tz } = useDemo();
+  const { state, now, tz, may } = useDemo();
   const live = state.devices.filter((d) => !d.disabled);
   const online = live.filter((d) => d.conn === "online").length;
   const offline = live.filter((d) => d.conn === "offline" || d.conn === "error").length;
@@ -16,6 +17,17 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
   const openReviews = state.reviews.filter((r) => r.status === "open").length;
   const recent = [...state.syncs].sort((a, b) => b.started.localeCompare(a.started)).slice(0, 6);
 
+  if (state.devices.length === 0) {
+    return (
+      <GlassCard>
+        <EmptyState
+          title="No biometric devices yet"
+          body={may("manageBiometricDevices") ? "Add the first device to see its status, sync activity and review items here. In this demonstration nothing is connected." : "An Admin adds biometric devices. Their status, sync activity and review items will appear here."}
+          action={may("manageBiometricDevices") ? <Button variant="primary" onClick={() => goto("devices")}>Go to devices</Button> : undefined}
+        />
+      </GlassCard>
+    );
+  }
   return (
     <div className="stack">
       <div className="grid-kpi bio-kpis">
@@ -32,7 +44,7 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
           <ul className="bio-attn">
             {attention.map((d) => (
               <li key={d.id}>
-                <button type="button" className="link-btn" onClick={() => openDevice(d.id)}>{d.name}</button>
+                <button type="button" className="link-btn" onClick={() => openDevice(d.id)}><span className="bio-wrap">{d.name}</span></button>
                 <span className="meta">{needsAttention(d, state, now).join(" · ")}</span>
               </li>
             ))}

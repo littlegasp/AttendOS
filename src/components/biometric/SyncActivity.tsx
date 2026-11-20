@@ -63,7 +63,7 @@ export function SyncTable({ runs, openDevice, showDevice = true }: { runs: SyncR
 }
 
 export function SyncActivity({ openDevice }: { openDevice: (id: string) => void }) {
-  const { state } = useDemo();
+  const { state, may } = useDemo();
   const [device, setDevice] = useState("");
   const [status, setStatus] = useState("");
   const runs = useMemo(
@@ -89,7 +89,7 @@ export function SyncActivity({ openDevice }: { openDevice: (id: string) => void 
           </select>
         </label>
         <span className="grow" />
-        <NotYet label="Retry failed syncs" phase="B3–B4" />
+        {may("retryBiometricSync") ? <NotYet label="Retry failed syncs" phase="B3–B4" /> : null}
       </div>
       <p className="meta" aria-live="polite">
         {runs.length} runs · {totals.received} received · {totals.stored} stored · {totals.dup} confirmed duplicates · {totals.poss} possible duplicates · {totals.un} unmatched · {totals.rej} rejected

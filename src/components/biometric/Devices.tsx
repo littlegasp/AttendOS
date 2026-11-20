@@ -7,7 +7,8 @@ import { type Conn, connOf, DIRECTION_LABEL, MANUFACTURER_LABEL, type Manufactur
 import { ago, ConnBadge, useDemo } from "./shared";
 
 export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => void; onAdd: () => void }) {
-  const { state, offices, now } = useDemo();
+  const { state, offices, now, may } = useDemo();
+  const canAdd = may("manageBiometricDevices");
   const [q, setQ] = useState("");
   const [maker, setMaker] = useState("");
   const [conn, setConn] = useState("");
@@ -34,7 +35,7 @@ export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => 
           <label className="sr-only" htmlFor="bio-q">Search devices</label>
           <input id="bio-q" className="input" type="search" placeholder="Search name, model or serial number…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <Button variant="primary" onClick={onAdd}>Add device</Button>
+        {canAdd ? <Button variant="primary" onClick={onAdd}>Add device</Button> : null}
       </div>
       <div className="emp-filters" role="group" aria-label="Filters">
         <Chip label="Manufacturer" value={maker} onChange={setMaker} options={Object.entries(MANUFACTURER_LABEL).map(([value, label]) => ({ value, label }))} />
@@ -48,8 +49,8 @@ export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => 
       {rows.length === 0 ? (
         <EmptyState
           title={filtered ? "No devices match" : "No biometric devices yet"}
-          body={filtered ? "Try a different search or clear the filters." : "Add the first device to start mapping employee codes. In this demonstration nothing is connected."}
-          action={filtered ? undefined : <Button variant="primary" onClick={onAdd}>Add device</Button>}
+          body={filtered ? "Try a different search or clear the filters." : canAdd ? "Add the first device to start mapping employee codes. In this demonstration nothing is connected." : "An Admin adds biometric devices. Once one is added you can map employee codes here."}
+          action={filtered || !canAdd ? undefined : <Button variant="primary" onClick={onAdd}>Add device</Button>}
         />
       ) : (
         <>
@@ -69,7 +70,7 @@ export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => 
                     <tr key={d.id} className="row-link" onClick={() => openDevice(d.id)}>
                       <th scope="row">
                         <button type="button" className="person-cell" onClick={(e) => { e.stopPropagation(); openDevice(d.id); }}>
-                          <span><span className="pc-name">{d.name}</span>{attn.length ? <span className="tiny block text-warning">{attn[0]}</span> : null}</span>
+                          <span><span className="pc-name bio-wrap">{d.name}</span>{attn.length ? <span className="tiny block text-warning">{attn[0]}</span> : null}</span>
                         </button>
                       </th>
                       <td>{MANUFACTURER_LABEL[d.manufacturer]}</td>
@@ -92,7 +93,7 @@ export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => 
               <li key={d.id}>
                 <button type="button" className="emp-card" onClick={() => openDevice(d.id)}>
                   <span className="ec-main">
-                    <strong>{d.name}</strong>
+                    <strong className="bio-wrap">{d.name}</strong>
                     <span className="meta block">{MANUFACTURER_LABEL[d.manufacturer]} {d.model} · {officeName(d.officeId)}</span>
                     <span className="tiny muted block">{METHOD_SHORT[d.method]} · {DIRECTION_LABEL[d.direction]} · last sync {ago(d.lastSync, now)}</span>
                   </span>
