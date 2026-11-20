@@ -321,5 +321,8 @@ implementation (20 Nov 2026). **B3.4 implemented locally:** `supabase/migrations
 `e2e/biometric_projection_http.py`; deletion script reordered; read-only hosted checks extended. Full database run 843
 checks. Not run on any hosted project; pg_cron not installed; projection off for every real company; the UI items
 (provisional display, labels, CSV Source column) are NOT built yet — projection must stay off until they are.
-Report: docs/biometric/BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md. Awaiting owner review.
+Report: docs/biometric/BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md. **Final review (21 Nov 2026):** a delayed device-mode
+IN on a finished day is now counted only together with the OUT that closes it (decided as one unit by the OUT's own
+rules), otherwise it is correction_needed; re-presses inside a counted pair stay extra on every run. New test group R
+(16), proofs 9a/9b; full database run 859 checks; report §11. Awaiting owner review.
 

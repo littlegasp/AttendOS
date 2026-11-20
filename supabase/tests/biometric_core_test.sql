@@ -125,9 +125,9 @@ select pg_temp.expect((select count(*) from biometric_agents) = 2, 'Admin sees t
 select pg_temp.act('owner');
 select pg_temp.expect((select key_hash = sha256(convert_to(current_setting('t.key'), 'UTF8')) from biometric_agent_credentials where agent_id = current_setting('t.agent')::uuid),
   'only the SHA-256 of the key is stored');
-select pg_temp.expect(not exists (select 1 from audit_log where (coalesce(before::text, '') || coalesce(after::text, '')) like '%' || split_part(current_setting('t.key'), '_', 3) || '%')
-  and not exists (select 1 from biometric_agents a where to_jsonb(a)::text like '%' || split_part(current_setting('t.key'), '_', 3) || '%')
-  and not exists (select 1 from biometric_agent_credentials c where to_jsonb(c)::text like '%' || split_part(current_setting('t.key'), '_', 3) || '%'),
+select pg_temp.expect(not exists (select 1 from audit_log where (coalesce(before::text, '') || coalesce(after::text, '')) like '%' || substr(current_setting('t.key'), 18) || '%')
+  and not exists (select 1 from biometric_agents a where to_jsonb(a)::text like '%' || substr(current_setting('t.key'), 18) || '%')
+  and not exists (select 1 from biometric_agent_credentials c where to_jsonb(c)::text like '%' || substr(current_setting('t.key'), 18) || '%'),
   'the secret part of the key appears in no table and no audit entry');
 select pg_temp.expect((select count(*) from audit_log where action = 'issue_key' and after ? 'key_prefix' and not after ? 'key_hash') = 2, 'key issue audited with prefix only');
 select pg_temp.expect(biometric_check_agent_key(current_setting('t.key')) = current_setting('t.agent')::uuid, 'a valid key identifies its agent');

@@ -211,7 +211,8 @@ q $DB "select biometric_project_day('$E', local_today(proof.c())); select proof.
 sleep 0.4; sess - "begin; select status from biometric_event_state where raw_event_id = $H for update nowait; rollback;" /tmp/p7b.txt; wait
 grep -q "could not obtain lock" /tmp/p7b.txt && bad "7. the not-due held punch was locked" || { [ "$(head -1 /tmp/p7b.txt)" = held ] && ok "7. while its day is being projected, a not-due held punch stays unlocked (FOR UPDATE NOWAIT succeeds)" || bad "7. $(cat /tmp/p7b.txt)"; }
 
-# ------------------------------------------------------------ 8. mixed load, 5 rounds: punch, correction, review, ingest, queue at once
+# ------------------------------------------------------------ 8. mixed load (the 'no biometric check-in beside an app one' count is limited to this proof's own
+#    people: the projection test's fixtures include a legitimate split day, app morning + biometric afternoon), 5 rounds: punch, correction, review, ingest, queue at once
 DB=proj_race_8; fresh $DB
 for R in $(seq 1 5); do
   E=$(q $DB "select proof.fresh_person('m8p$R')"); F=$(q $DB "select proof.fresh_person('m8f$R')")
@@ -232,11 +233,73 @@ q $DB "call biometric_run_projection()" > /dev/null 2>&1; echo "call biometric_r
 INV=$(q $DB "select (select count(*) from attendance_events e join biometric_raw_events r on r.id = e.biometric_event_id join biometric_event_state s on s.raw_event_id = r.id
                        where e.at <> r.punch_at or s.employee_id <> e.employee_id or s.work_date <> e.work_date)
           + (select count(*) from (select 1 from attendance_events where projection_slot is not null group by employee_id, work_date, projection_slot having count(*) > 1) x)
-          + (select count(*) from (select employee_id, work_date from attendance_events where superseded_by is null and kind = 'in' group by 1, 2 having count(*) > 1
+          + (select count(*) from (select employee_id, work_date from attendance_events where superseded_by is null and kind = 'in'
+                                     and employee_id in (select id from employees where email like '%@proof.co') group by 1, 2 having count(*) > 1
                                    and bool_or(source = 'biometric') and bool_or(source <> 'biometric')) y)")
 echo "   mixed load: deadlocks $DEADLOCKS; invariant violations $INV"
 [ "$DEADLOCKS" = 0 ] && [ "$INV" = 0 ] && ok "8. 5 rounds of queue + punch + correction + review + ingest at once: no deadlock, every biometric row matches its punch, no slot twice, no biometric check-in beside an app/correction one" || bad "8. deadlocks=$DEADLOCKS inv=$INV"
 
-for d in proj_race_1 proj_race_2 proj_race_3 proj_race_4 proj_race_5 proj_race_6 proj_race_7 proj_race_8; do dropdb --if-exists $d 2>/dev/null; done
+# ------------------------------------------------------------ 9. delayed device-mode IN + OUT pair (B3.4 final review) vs web check-in and vs correction approval
+# day invariant: the day's live events alternate in/out and end with an out; the person is not left 'working' on that day; every biometric row matches
+# its punch; a second projection changes nothing
+pairinv() { q $DB "select (select count(*) from (select kind, lag(kind) over (order by at, id) pk, row_number() over (order by at desc, id desc) rn from attendance_events
+                             where employee_id = '$1' and work_date = local_today(proof.c()) - 1 and superseded_by is null) x where kind = pk or (rn = 1 and kind <> 'out'))
+                + (select count(*) from session_state('$1') where state = 'working' and work_date = local_today(proof.c()) - 1)
+                + (select count(*) from attendance_events e join biometric_raw_events r on r.id = e.biometric_event_id join biometric_event_state st on st.raw_event_id = r.id
+                    where e.employee_id = '$1' and (e.at <> r.punch_at or st.work_date <> e.work_date or e.source <> 'biometric'))
+                + (select count(*) from biometric_event_state where employee_id = '$1' and status in ('stored') )"; }
+snap() { q $DB "select md5(coalesce(string_agg(x, '|' order by x), '')) from (select id::text || kind || at::text || coalesce(superseded_by::text, '') x from attendance_events where employee_id = '$1'
+                union all select raw_event_id::text || status || coalesce(flag_reasons::text, '') from biometric_event_state where employee_id = '$1') y"; }
+DB=proj_race_9; fresh $DB
+BAD=0
+for R in $(seq 1 6); do
+  E=$(q $DB "select proof.fresh_person('r9p$R')"); T=R9P$R
+  q $DB "select proof.punch('PDV001', '$T', proof.at(1, '09:00'), 'authenticated', 'in'); select proof.punch('PDV002', '$T', proof.at(1, '17:00'), 'authenticated', 'out');" > /dev/null
+  if [ $((R % 2)) = 0 ]; then
+    ( sess "r9p$R@proof.co" "begin; select punch('in', 19.1000, 72.9000, 10) ->> 'ok'; select pg_sleep(0.6); commit;" /tmp/p9a.txt ) &
+    sleep 0.2; sess - "select biometric_project_day('$E', local_today(proof.c()) - 1)" /tmp/p9b.txt; wait
+  else
+    ( sess - "begin; select biometric_project_day('$E', local_today(proof.c()) - 1); select pg_sleep(0.6); commit;" /tmp/p9b.txt ) &
+    sleep 0.2; sess "r9p$R@proof.co" "select punch('in', 19.1000, 72.9000, 10) ->> 'ok'" /tmp/p9a.txt; wait
+  fi
+  W=$(grep -v '^$' /tmp/p9a.txt | tail -1); I=$(pairinv $E)
+  PAIR=$(q $DB "select string_agg(kind || ':' || source, ',' order by at) from attendance_events where employee_id = '$E' and work_date = local_today(proof.c()) - 1 and superseded_by is null")
+  ST=$(q $DB "select state || ':' || (work_date = local_today(proof.c())) from session_state('$E')")
+  S1=$(snap $E); q $DB "select biometric_project_day('$E', local_today(proof.c()) - 1)" > /dev/null; S2=$(snap $E)
+  BIO=$(q $DB "select string_agg(status || coalesce(':' || nullif(array_to_string(flag_reasons, '+'), ''), ''), ',' order by raw_event_id) from biometric_event_state where employee_id = '$E'")
+  echo "   round $R: web -> $W; day-1: ${PAIR:-none}; punches: $BIO; now: $ST; invariant violations $I; rerun changed: $([ "$S1" = "$S2" ] && echo no || echo yes)"
+  # two safe outcomes, decided by who takes lock 7 first: projection first -> the pair is written whole; web first -> the person is checked in now,
+  # so an IN for yesterday is an impossible transition and BOTH punches go to HR (correction_needed). Never one without the other.
+  case "$PAIR|$BIO" in "in:biometric,out:biometric|projected,projected"|"|correction_needed:impossible_transition,correction_needed:impossible_transition") ;; *) BAD=$((BAD+1));; esac
+  [ "$W" = true ] && [ "$ST" = working:true ] && [ "$I" = 0 ] && [ "$S1" = "$S2" ] || BAD=$((BAD+1))
+done
+[ $BAD = 0 ] && ok "9a. delayed IN+OUT pair projected while the person checks in on the web (6 rounds, both orders): web check-in always succeeds; the pair is either written whole or sent whole to HR, never half; yesterday is never left open; a rerun changes nothing" || bad "9a. $BAD rounds"
+for ORDER in approval_first projection_first; do
+  E=$(q $DB "select proof.fresh_person('r9$ORDER')"); T=$(echo r9$ORDER | tr a-z A-Z)
+  q $DB "select proof.punch('PDV001', '$T', proof.at(1, '09:00'), 'authenticated', 'in'); select proof.punch('PDV002', '$T', proof.at(1, '17:00'), 'authenticated', 'out');" > /dev/null
+  sess "r9$ORDER@proof.co" "select request_correction(local_today(proof.c()) - 1, 'wrong_time', proof.at(1, '08:55'), proof.at(1, '17:02'), 'Machine was late')" /tmp/p9r.txt
+  CID=$(q $DB "select id from attendance_corrections where employee_id = '$E' and status = 'pending'")
+  if [ $ORDER = approval_first ]; then
+    ( sess hr@proj.co "begin; select decide_correction($CID, true) ->> 'ok'; select pg_sleep(0.8); commit;" /tmp/p9c.txt ) &
+    sleep 0.3; sess - "select biometric_project_day('$E', local_today(proof.c()) - 1)" /tmp/p9d.txt; wait
+  else
+    ( sess - "begin; select biometric_project_day('$E', local_today(proof.c()) - 1); select pg_sleep(0.8); commit;" /tmp/p9d.txt ) &
+    sleep 0.3; sess hr@proj.co "select decide_correction($CID, true) ->> 'ok'" /tmp/p9c.txt; wait
+  fi
+  q $DB "select biometric_project_day('$E', local_today(proof.c()) - 1)" > /dev/null
+  A=$(grep -v '^$' /tmp/p9c.txt | tail -1); I=$(pairinv $E)
+  DAY=$(q $DB "select string_agg(kind || ':' || source, ',' order by at) from attendance_events where employee_id = '$E' and work_date = local_today(proof.c()) - 1 and superseded_by is null")
+  BIO=$(q $DB "select string_agg(status, ',' order by raw_event_id) from biometric_event_state where employee_id = '$E'")
+  S1=$(snap $E); q $DB "select biometric_project_day('$E', local_today(proof.c()) - 1)" > /dev/null; S2=$(snap $E)
+  # a punch held while the correction was pending is looked at again when its next check is due; bring that forward and look again
+  q $DB "update biometric_event_state set next_check_at = now() - interval '1 second' where employee_id = '$E' and status = 'held'; select biometric_project_day('$E', local_today(proof.c()) - 1);" > /dev/null
+  BIO2=$(q $DB "select string_agg(status, ',' order by raw_event_id) from biometric_event_state where employee_id = '$E'"); I2=$(pairinv $E)
+  echo "   [$ORDER] next due look: punches $BIO2; invariant violations $I2"
+  [ "$BIO2" = "after_correction,after_correction" ] && [ "$I2" = 0 ] || I=$((I+1))
+  echo "   [$ORDER] approval -> $A; day-1 live: $DAY; punches: $BIO; invariant violations $I; rerun changed: $([ "$S1" = "$S2" ] && echo no || echo yes)"
+  [ "$A" = true ] && [ "$DAY" = "in:correction,out:correction" ] && [ "$I" = 0 ] && [ "$S1" = "$S2" ] && ok "9b. delayed pair vs correction approval ($ORDER): only the correction's in/out count, both punches are accounted for ($BIO, then after_correction), yesterday is closed, a rerun changes nothing" || bad "9b. $ORDER a=$A day=$DAY bio=$BIO inv=$I"
+done
+
+for d in proj_race_1 proj_race_2 proj_race_3 proj_race_4 proj_race_5 proj_race_6 proj_race_7 proj_race_8 proj_race_9; do dropdb --if-exists $d 2>/dev/null; done
 echo "$PASS passed, $FAIL failed"
 [ $FAIL = 0 ]

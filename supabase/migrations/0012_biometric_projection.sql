@@ -349,6 +349,10 @@ declare
   r_at timestamptz[] := '{}';
   r_pending boolean[] := '{}';
   done bigint[] := '{}';                                            -- punches already given a role in this call
+  c2 record;
+  pair_out bigint;                                                  -- device mode: the OUT that closes a delayed IN (§6.6)
+  pair_out_at timestamptz;
+  pair_skip bigint[];
   plan jsonb := '[]';                                               -- role decisions not yet written (§6.9)
   in_raw bigint; base_in timestamptz;
   out_raw bigint;
@@ -494,6 +498,7 @@ begin
               where s.employee_id = p_emp and s.work_date = p_day and r.punch_at <= now() and s.projected_event_id is null
                 and (s.status = 'stored' or (s.status in ('extra', 'reconciled') and not s.decided))
               order by r.punch_at, s.raw_event_id loop
+      if c.id = any (done) then continue; end if;                     -- already decided with its pair in this call
       if n + 2 > lim - 1 then                                         -- a device punch can cost 2 (slot + role)
         if c.status <> 'stored' then update public.biometric_event_state set processed_at = null where raw_event_id = c.id; n := n + 1; end if;
         return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'device');
@@ -508,6 +513,14 @@ begin
          and e.kind = c.direction and e.source in ('web', 'correction') and abs(extract(epoch from e.at - c.punch_at)) <= st.reconcile_min * 60
        order by abs(extract(epoch from e.at - c.punch_at)) limit 1;
       if ev_id is not null then n := n + public.biometric_set_role(c.id, 'reconciled', p_reconciled => ev_id)::int; continue; end if;
+      -- a re-press: same direction as the counted event just before it, within the reconciliation window → extra. Checked
+      -- against the event immediately BEFORE the punch (not only the day's last one), so a re-press inside a counted pair
+      -- stays extra on every later run instead of turning into out_of_order (idempotence; B3.4 final review)
+      select e.kind, e.at into last_kind, newest from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day
+         and e.superseded_by is null and e.at <= c.punch_at order by e.at desc, e.id desc limit 1;
+      if last_kind = c.direction and c.punch_at - newest <= make_interval(mins => st.reconcile_min) then
+        n := n + public.biometric_set_role(c.id, 'extra', p_flag => 'repeat_' || c.direction)::int; continue;
+      end if;
       select max(at) into newest from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null;
       if newest is not null and c.punch_at <= newest then
         n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'out_of_order')::int; continue;
@@ -515,28 +528,67 @@ begin
       select kind into last_kind from public.attendance_events where employee_id = p_emp and work_date = p_day and superseded_by is null
        order by at desc, id desc limit 1;
       select * into ss from public.session_state(p_emp);
-      if c.direction = last_kind and newest is not null and c.punch_at - newest <= make_interval(mins => st.reconcile_min) then
-        n := n + public.biometric_set_role(c.id, 'extra', p_flag => 'repeat_' || c.direction)::int; continue;
-      end if;
       if (c.direction = 'in' and (last_kind in ('in', 'break_start', 'break_end')
              or (ss.state <> 'off' and ss.work_date <> p_day and now() < public.biometric_day_close_at(p_emp, ss.work_date))))
          or (c.direction = 'out' and coalesce(last_kind, 'out') in ('out', 'break_start')) then
         n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'impossible_transition')::int; continue;
       end if;
-      -- session safety (HR acceptance does NOT bypass this): an IN on a finished day that would become the person's newest
-      -- event is allowed only if the day's next pending punch is an OUT that will close it in this same call
-      -- (implementation fix found in B3.4 testing: a delayed in-order IN+OUT pair must not be refused for its IN alone)
+      -- Session safety (HR acceptance does NOT bypass this). An IN on a finished day that would become the person's newest
+      -- event may only be counted together with the OUT that closes it. The pair is decided here, as one unit, by the same
+      -- rules the OUT would meet on its own after the IN is counted; if the OUT would not be counted (reconciled with an app
+      -- check-out, a double press, out of order, no direction, held/flagged/duplicate so not a candidate, another IN in
+      -- between, nothing at all), the IN is correction_needed and the OUT is left to its own rules. Re-presses of the same
+      -- IN between the two (within the reconciliation window) are recorded as extra in the same step. (B3.4 final review:
+      -- the first fix only looked at the next punch's direction, so an OUT that then reconciled left the IN open.)
       if c.direction = 'in' and closed
          and c.punch_at > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity') then
-        if coalesce((select r2.direction from public.biometric_event_state s2 join public.biometric_raw_events r2 on r2.id = s2.raw_event_id
-                      where s2.employee_id = p_emp and s2.work_date = p_day and s2.status = 'stored' and r2.punch_at > c.punch_at and r2.punch_at <= now()
-                      order by r2.punch_at, s2.raw_event_id limit 1), '') <> 'out' then
+        pair_out := null; pair_skip := '{}';
+        -- an earlier punch of this day, after everything counted, already waits for a correction: the tail of the day is
+        -- ambiguous, so no later pair is guessed from it (keeps repeated runs giving the same answer)
+        if exists (select 1 from public.biometric_event_state s3 join public.biometric_raw_events r3 on r3.id = s3.raw_event_id
+                    where s3.employee_id = p_emp and s3.work_date = p_day and s3.status = 'correction_needed' and r3.punch_at < c.punch_at
+                      and r3.punch_at > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity')) then
           n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day')::int; continue;
         end if;
-        if n + 4 > lim - 1 then                                       -- IN and its closing OUT are written in the same call
-          if c.status <> 'stored' then update public.biometric_event_state set processed_at = null where raw_event_id = c.id; n := n + 1; end if;
-          return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'device');
+        for c2 in select s2.raw_event_id id, s2.status, r2.punch_at, r2.direction
+                    from public.biometric_event_state s2 join public.biometric_raw_events r2 on r2.id = s2.raw_event_id
+                   where s2.employee_id = p_emp and s2.work_date = p_day and r2.punch_at <= now() and s2.projected_event_id is null
+                     and (s2.status = 'stored' or (s2.status in ('extra', 'reconciled') and not s2.decided))
+                     and (r2.punch_at, s2.raw_event_id) > (c.punch_at, c.id) and not (s2.raw_event_id = any (done))
+                   order by r2.punch_at, s2.raw_event_id loop
+          if c2.direction = 'in' and c2.punch_at - c.punch_at <= make_interval(mins => st.reconcile_min) then
+            pair_skip := pair_skip || c2.id; continue;                -- a re-press of this IN (double press or repeat)
+          end if;
+          if c2.direction = 'out'
+             and not exists (select 1 from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day and e.superseded_by is null
+                               and e.source = 'biometric' and e.kind = 'out' and abs(extract(epoch from e.at - c2.punch_at)) <= st.double_press_s)
+             and not exists (select 1 from public.attendance_events e where e.employee_id = p_emp and e.work_date = p_day and e.superseded_by is null
+                               and e.kind = 'out' and e.source in ('web', 'correction') and abs(extract(epoch from e.at - c2.punch_at)) <= st.reconcile_min * 60)
+             and not exists (select 1 from public.attendance_events e where e.employee_id = p_emp and e.superseded_by is null
+                               and e.at > c.punch_at and e.at <= c2.punch_at) then
+            pair_out := c2.id; pair_out_at := c2.punch_at;
+          end if;
+          exit;                                                       -- only the first real punch after the IN can close it
+        end loop;
+        if pair_out is null then
+          n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day')::int; continue;
         end if;
+        if n + 4 + cardinality(pair_skip) > lim - 1 then              -- the pair and its re-presses are written whole or not at all
+          if c.status <> 'stored' then update public.biometric_event_state set processed_at = null where raw_event_id = c.id; n := n + 1; end if;
+          return jsonb_build_object('ok', true, 'complete', false, 'written', n, 'stopped_in', 'device_pair');
+        end if;
+        ev_id := public.biometric_write_slot(p_emp, p_day, 'dev:' || c.id, 'in', c.id, 'device');
+        perform public.biometric_set_role(c.id, 'projected', ev_id, 'dev:' || c.id);
+        for i in 1 .. coalesce(cardinality(pair_skip), 0) loop
+          perform public.biometric_set_role(pair_skip[i], 'extra', p_flag => case
+            when (select r3.punch_at from public.biometric_raw_events r3 where r3.id = pair_skip[i]) - c.punch_at <= make_interval(secs => st.double_press_s)
+            then 'double_press' else 'repeat_in' end);
+        end loop;
+        ev_id := public.biometric_write_slot(p_emp, p_day, 'dev:' || pair_out, 'out', pair_out, 'device');
+        perform public.biometric_set_role(pair_out, 'projected', ev_id, 'dev:' || pair_out);
+        n := n + 4 + coalesce(cardinality(pair_skip), 0);
+        done := done || c.id || pair_out || pair_skip;
+        continue;
       end if;
       ev_id := public.biometric_write_slot(p_emp, p_day, 'dev:' || c.id, c.direction, c.id, 'device');
       perform public.biometric_set_role(c.id, 'projected', ev_id, 'dev:' || c.id);

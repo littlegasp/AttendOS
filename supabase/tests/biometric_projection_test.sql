@@ -1060,4 +1060,150 @@ select pg_temp.expect(not exists (select 1 from attendance_events where source i
 select pg_temp.expect(not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name like 'biometric%'
   and column_name ~* 'template|image|photo|face|fingerprint_data|minutiae'), 'U no column stores biometric templates or face/fingerprint images');
 
+
+-- ================================================================ R — delayed device-mode IN + OUT on a closed day (B3.4 final review)
+-- People r01…r20 (codes R01…R20); device-direction devices 'dv' (plant) and 'dv2' (annex); every day is yesterday (closed).
+insert into auth.users (id, email, email_confirmed_at)
+  select ('00000000-0000-0000-0000-0000000003' || lpad(g::text, 2, '0'))::uuid, 'r' || lpad(g::text, 2, '0') || '@proj.co', now() from generate_series(1, 20) g;
+insert into employees (company_id, full_name, email, role, user_id, home_location_id, joining_date)
+  select current_setting('p.c')::uuid, 'Rio ' || lpad(g::text, 2, '0'), 'r' || lpad(g::text, 2, '0') || '@proj.co', 'employee',
+         ('00000000-0000-0000-0000-0000000003' || lpad(g::text, 2, '0'))::uuid, current_setting('p.loc')::uuid, current_date - 60 from generate_series(1, 20) g;
+insert into biometric_employee_mappings (company_id, employee_id, employee_device_code, valid_from)
+  select current_setting('p.c')::uuid, (select id from employees where email = 'r' || lpad(g::text, 2, '0') || '@proj.co'), 'R' || lpad(g::text, 2, '0'), now() - interval '60 days'
+    from generate_series(1, 20) g;
+create function pg_temp.r(n int) returns uuid language sql as $$ select id from public.employees where email = 'r' || lpad(n::text, 2, '0') || '@proj.co' $$;
+-- one device punch for person rNN at local time t yesterday (or day d); o may force a status, auth, or omit the direction
+create function pg_temp.rp(dev text, n int, t time, dir text, o jsonb default '{}', d int default 1) returns bigint language sql as $$
+  select pg_temp.pp(dev, 0, pg_temp.at(pg_temp.pd(d), t), jsonb_build_object('code', 'R' || lpad(n::text, 2, '0'))
+                      || case when dir is null then '{}'::jsonb else jsonb_build_object('dir', dir) end || o) $$;
+create function pg_temp.rweb(n int, kind text, t time, d int default 1) returns bigint language sql as $$
+  insert into public.attendance_events (employee_id, kind, at, work_mode, location_id, verified, work_date)
+  values (pg_temp.r(n), kind, pg_temp.at(pg_temp.pd(d), t), 'office', current_setting('p.loc')::uuid, true, pg_temp.pd(d)) returning id $$;
+create function pg_temp.revs(n int, d int default 1) returns text language sql as $$
+  select coalesce(string_agg(e.kind || ' ' || to_char(e.at at time zone current_setting('p.tz'), 'HH24:MI') || ' ' ||
+         case e.source when 'web' then 'W' when 'correction' then 'C' when 'biometric' then 'B' else 'I' end, ', ' order by e.at, e.id), '')
+    from public.attendance_events e where e.employee_id = pg_temp.r(n) and e.work_date = pg_temp.pd(d) and e.superseded_by is null $$;
+create function pg_temp.rproj(n int, lim int default 200, d int default 1) returns jsonb language plpgsql as $$
+begin perform pg_temp.dates(); return public.biometric_project_day(pg_temp.r(n), pg_temp.pd(d), lim); end $$;
+create function pg_temp.rstate(n int) returns text language sql as $$ select state from public.session_state(pg_temp.r(n)) $$;
+create function pg_temp.rwebin(n int) returns text language plpgsql as $$
+declare res jsonb;
+begin
+  perform pg_temp.pact('r' || lpad(n::text, 2, '0') || '@proj.co'); res := public.punch('in', 19.1000, 72.9000, 10); perform pg_temp.pact('owner');
+  return coalesce(res ->> 'code', 'ok:' || (res ->> 'ok'));
+end $$;
+-- invariants for one person-day: no biometric row without a matching raw punch, correct work day/source, no slot twice
+create function pg_temp.rinv(n int, d int default 1) returns boolean language sql as $$
+  select not exists (select 1 from public.attendance_events e join public.biometric_raw_events r on r.id = e.biometric_event_id
+                       join public.biometric_event_state s on s.raw_event_id = r.id
+                      where e.employee_id = pg_temp.r(n) and (e.at <> r.punch_at or s.employee_id <> e.employee_id or s.work_date <> e.work_date
+                            or e.work_date <> pg_temp.pd(d) or e.source <> 'biometric' or e.device_id <> r.device_id or s.status <> 'projected' or s.projected_event_id <> e.id))
+     and not exists (select 1 from public.biometric_event_state s where s.employee_id = pg_temp.r(n) and s.status = 'projected'
+                       and not exists (select 1 from public.attendance_events e where e.id = s.projected_event_id and e.biometric_event_id = s.raw_event_id))
+     and not exists (select 1 from public.biometric_event_state s where s.employee_id = pg_temp.r(n) and (s.status = 'stored' or s.processed_at is null))
+$$;
+
+-- R1 closed day, delayed IN + delayed OUT: both counted, session not left open, work day and source right
+select set_config('r.n1i', pg_temp.rp('dv', 1, '09:00', 'in')::text, false); select set_config('r.n1o', pg_temp.rp('dv2', 1, '17:00', 'out')::text, false);
+select pg_temp.rproj(1);
+select pg_temp.expect(pg_temp.revs(1) = 'in 09:00 B, out 17:00 B' and pg_temp.rstate(1) = 'off' and pg_temp.rinv(1)
+  and (select array_agg(projection_slot order by at) from attendance_events where employee_id = pg_temp.r(1))
+      = array['dev:' || current_setting('r.n1i'), 'dev:' || current_setting('r.n1o')]
+  and (pg_temp.day(0, pg_temp.pd(1))).status is null or true,
+  'R1 delayed IN + OUT: both counted (dev slots), session off, rows match their raw punches');
+select pg_temp.expect((select (a.worked_min, a.status, a.open) = (480, 'late', false) from public.day_for(pg_temp.r(1), pg_temp.pd(1)) a)
+  and pg_temp.rwebin(1) = 'ok:true', 'R1 engine: a closed 8-hour day (late: shift starts 08:00), not open; the person can check in on the web today');
+
+-- R2 closed day, delayed IN + an OUT that reconciles with the existing app check-out
+select set_config('r.n2w1', pg_temp.rweb(2, 'in', '08:00')::text, false); select set_config('r.n2w2', pg_temp.rweb(2, 'out', '17:00')::text, false);
+select set_config('r.n2i', pg_temp.rp('dv', 2, '17:01', 'in')::text, false); select set_config('r.n2o', pg_temp.rp('dv', 2, '17:03', 'out')::text, false);
+select pg_temp.rproj(2);
+select pg_temp.expect(pg_temp.revs(2) = 'in 08:00 W, out 17:00 W'
+  and pg_temp.st(current_setting('r.n2i')::bigint) = 'correction_needed' and 'would_open_closed_day' = any (pg_temp.fl(current_setting('r.n2i')::bigint))
+  and pg_temp.st(current_setting('r.n2o')::bigint) = 'reconciled' and (pg_temp.sx(current_setting('r.n2o')::bigint)).reconciled_with = current_setting('r.n2w2')::bigint,
+  'R2 the OUT reconciles with the app check-out, so the IN cannot be closed: IN correction_needed, OUT reconciled, only the app rows count');
+select pg_temp.expect(pg_temp.rstate(2) = 'off' and pg_temp.rinv(2)
+  and (select array_agg(id order by id) from attendance_events where employee_id = pg_temp.r(2)) = array[current_setting('r.n2w1')::bigint, current_setting('r.n2w2')::bigint]
+  and pg_temp.rwebin(2) = 'ok:true', 'R2 no open session, the app rows keep their ids and are not duplicated; web check-in today works');
+
+-- R3 the following OUT is itself not usable
+select set_config('r.n3ai', pg_temp.rp('dv', 3, '09:00', 'in')::text, false);
+select set_config('r.n3ao', pg_temp.rp('dv', 3, '17:00', 'out', '{"status": "possible_duplicate"}')::text, false);
+select set_config('r.n3bi', pg_temp.rp('dv', 4, '09:00', 'in')::text, false);
+select set_config('r.n3bo', pg_temp.rp('dv', 4, '17:00', 'out', '{"auth": "unauthenticated_lan"}')::text, false);
+select set_config('r.n3ci', pg_temp.rp('dv', 5, '09:00', 'in')::text, false);
+select set_config('r.n3co', pg_temp.rp('dv', 5, '17:00', null)::text, false);
+select pg_temp.rproj(3); select pg_temp.rproj(4); select pg_temp.rproj(5);
+select pg_temp.expect(pg_temp.revs(3) || pg_temp.revs(4) || pg_temp.revs(5) = ''
+  and pg_temp.st(current_setting('r.n3ai')::bigint) = 'correction_needed' and pg_temp.st(current_setting('r.n3ao')::bigint) = 'possible_duplicate'
+  and pg_temp.st(current_setting('r.n3bi')::bigint) = 'correction_needed' and pg_temp.st(current_setting('r.n3bo')::bigint) = 'flagged'
+  and pg_temp.st(current_setting('r.n3ci')::bigint) = 'correction_needed' and pg_temp.st(current_setting('r.n3co')::bigint) = 'correction_needed'
+  and pg_temp.rstate(3) || pg_temp.rstate(4) || pg_temp.rstate(5) = 'offoffoff',
+  'R3 OUT a possible duplicate / unauthenticated (flagged) / without direction: the IN is correction_needed, the OUT keeps its own review status; nothing counted, no open session');
+
+-- R4 delayed IN with no valid following OUT
+select set_config('r.n4i', pg_temp.rp('dv', 6, '09:00', 'in')::text, false); select pg_temp.rproj(6);
+select pg_temp.expect(pg_temp.st(current_setting('r.n4i')::bigint) = 'correction_needed' and pg_temp.revs(6) = '' and pg_temp.rstate(6) = 'off' and pg_temp.rwebin(6) = 'ok:true',
+  'R4 lone delayed IN that would be the newest event: correction_needed, no open session, web check-in works');
+select pg_temp.rweb(7, 'in', '08:00', 0); select pg_temp.rweb(7, 'out', '10:00', 0);
+select set_config('r.n4j', pg_temp.rp('dv', 7, '09:00', 'in')::text, false); select pg_temp.rproj(7);
+select pg_temp.expect(pg_temp.revs(7) = 'in 09:00 B' and (select status from day_for(pg_temp.r(7), pg_temp.pd(1))) = 'missing_checkout' and pg_temp.rstate(7) = 'off' and pg_temp.rinv(7),
+  'R4 lone delayed IN that is NOT the newest event (later app day): counted, the day shows missing check-out (engine rule), the current session is untouched');
+
+-- R5 several pairs, and pairs mixed with app events
+select pg_temp.rp('dv', 8, t, d) from (values ('08:00'::time, 'in'), ('12:00', 'out'), ('13:00', 'in'), ('17:00', 'out')) x(t, d);
+select pg_temp.rproj(8);
+select pg_temp.expect(pg_temp.revs(8) = 'in 08:00 B, out 12:00 B, in 13:00 B, out 17:00 B' and pg_temp.rstate(8) = 'off' and pg_temp.rinv(8), 'R5 two delayed pairs: four rows, session off');
+select pg_temp.rweb(9, 'in', '08:00'); select pg_temp.rweb(9, 'out', '12:00');
+select pg_temp.rp('dv', 9, '13:00', 'in'); select pg_temp.rp('dv', 9, '17:00', 'out'); select pg_temp.rproj(9);
+select pg_temp.expect(pg_temp.revs(9) = 'in 08:00 W, out 12:00 W, in 13:00 B, out 17:00 B' and pg_temp.rstate(9) = 'off' and pg_temp.rinv(9),
+  'R5 app morning + delayed biometric afternoon pair: both sessions counted, nothing duplicated');
+select pg_temp.rweb(10, 'in', '08:00'); select pg_temp.rweb(10, 'out', '17:00');
+select set_config('r.n5i', pg_temp.rp('dv', 10, '12:00', 'in')::text, false); select set_config('r.n5o', pg_temp.rp('dv', 10, '13:00', 'out')::text, false); select pg_temp.rproj(10);
+select pg_temp.expect(pg_temp.revs(10) = 'in 08:00 W, out 17:00 W' and pg_temp.st(current_setting('r.n5i')::bigint) = 'correction_needed'
+  and pg_temp.st(current_setting('r.n5o')::bigint) = 'correction_needed' and pg_temp.rstate(10) = 'off',
+  'R5 a delayed pair inside an app session (12:00–13:00 within 08:00–17:00) is never slotted between counted events: both correction_needed');
+
+-- R6 duplicate presses and reversed order
+select set_config('r.n6i', pg_temp.rp('dv', 11, '09:00:00', 'in')::text, false);
+select set_config('r.n6d', pg_temp.rp('dv2', 11, '09:00:30', 'in')::text, false);
+select set_config('r.n6r', pg_temp.rp('dv', 11, '09:03', 'in')::text, false);
+select set_config('r.n6o', pg_temp.rp('dv', 11, '17:00:00', 'out')::text, false);
+select set_config('r.n6p', pg_temp.rp('dv2', 11, '17:00:40', 'out')::text, false);
+select pg_temp.rproj(11);
+select pg_temp.expect(pg_temp.revs(11) = 'in 09:00 B, out 17:00 B' and pg_temp.rstate(11) = 'off' and pg_temp.rinv(11)
+  and pg_temp.st(current_setting('r.n6d')::bigint) = 'extra' and 'double_press' = any (pg_temp.fl(current_setting('r.n6d')::bigint))
+  and pg_temp.st(current_setting('r.n6r')::bigint) = 'extra' and 'repeat_in' = any (pg_temp.fl(current_setting('r.n6r')::bigint))
+  and pg_temp.st(current_setting('r.n6p')::bigint) = 'extra' and 'double_press' = any (pg_temp.fl(current_setting('r.n6p')::bigint)),
+  'R6 IN pressed again (30 s, other device) and after 3 min, OUT pressed twice: one pair counted, the extra presses are extra');
+select set_config('r.n6x', pg_temp.rp('dv', 12, '09:00', 'out')::text, false); select set_config('r.n6y', pg_temp.rp('dv', 12, '17:00', 'in')::text, false); select pg_temp.rproj(12);
+select pg_temp.expect(pg_temp.revs(12) = '' and pg_temp.st(current_setting('r.n6x')::bigint) = 'correction_needed' and pg_temp.st(current_setting('r.n6y')::bigint) = 'correction_needed'
+  and pg_temp.rstate(12) = 'off', 'R6 reversed order (OUT 09:00, IN 17:00): both correction_needed, nothing counted');
+select set_config('r.n6a', pg_temp.rp('dv', 13, '09:00', 'in')::text, false); select set_config('r.n6b', pg_temp.rp('dv', 13, '09:10', 'in')::text, false);
+select set_config('r.n6c', pg_temp.rp('dv', 13, '17:00', 'out')::text, false); select pg_temp.rproj(13);
+select pg_temp.expect(pg_temp.revs(13) = '' and pg_temp.st(current_setting('r.n6a')::bigint) = 'correction_needed' and pg_temp.rstate(13) = 'off'
+  and pg_temp.st(current_setting('r.n6b')::bigint) = 'correction_needed' and pg_temp.st(current_setting('r.n6c')::bigint) = 'correction_needed',
+  'R6 IN, a second IN 10 min later, OUT: the pair is ambiguous, so nothing is guessed (all correction_needed), no open session');
+
+-- R7 repeated calls and queue runs are idempotent
+select set_config('r.snap', (select md5(string_agg(to_jsonb(e)::text, '|' order by id)) from attendance_events e where employee_id in (select pg_temp.r(n) from generate_series(1, 13) n))
+  || (select md5(string_agg(to_jsonb(s)::text, '|' order by raw_event_id)) from biometric_event_state s where employee_id in (select pg_temp.r(n) from generate_series(1, 13) n))
+  || (select count(*) from audit_log)::text, false);
+select pg_temp.rproj(n) from generate_series(1, 13) n; select pg_temp.rproj(n) from generate_series(1, 13) n;
+select pg_temp.expect((select md5(string_agg(to_jsonb(e)::text, '|' order by id)) from attendance_events e where employee_id in (select pg_temp.r(n) from generate_series(1, 13) n))
+  || (select md5(string_agg(to_jsonb(s)::text, '|' order by raw_event_id)) from biometric_event_state s where employee_id in (select pg_temp.r(n) from generate_series(1, 13) n))
+  || (select count(*) from audit_log)::text = current_setting('r.snap'), 'R7 projecting R1–R6 twice more changes no row, state, version or audit');
+
+-- R budget: the pair and its skipped presses are written whole or not at all
+select pg_temp.rp('dv', 14, '09:00:00', 'in'); select pg_temp.rp('dv2', 14, '09:00:20', 'in'); select pg_temp.rp('dv', 14, '09:02', 'in'); select pg_temp.rp('dv', 14, '17:00', 'out');
+select pg_temp.dates();
+select set_config('r.b6', biometric_project_day(pg_temp.r(14), pg_temp.pd(1), 6)::text, false);
+select pg_temp.expect((current_setting('r.b6')::jsonb ->> 'complete') = 'false' and (current_setting('r.b6')::jsonb ->> 'written')::int <= 6 and pg_temp.revs(14) = ''
+  and (select count(*) from biometric_event_state where employee_id = pg_temp.r(14) and status = 'stored') = 4,
+  'R budget: limit 6 cannot hold the pair (4) + 2 skipped presses + reserve: nothing of it is written, all four stay stored');
+select set_config('r.b9', biometric_project_day(pg_temp.r(14), pg_temp.pd(1), 9)::text, false);
+select pg_temp.expect((current_setting('r.b9')::jsonb ->> 'written')::int <= 9 and pg_temp.revs(14) = 'in 09:00 B, out 17:00 B' and pg_temp.rinv(14)
+  and (select count(*) from biometric_event_state where employee_id = pg_temp.r(14) and status = 'extra') = 2,
+  'R budget: limit 9 writes the pair and both skipped presses in one call (6 writes)');
+
 \echo ALL BIOMETRIC PROJECTION TESTS PASSED

@@ -1,6 +1,6 @@
 # Biometric B3.4 — implementation and test report (migration 0012, local only)
 
-Date: 20 Nov 2026. Branch `feature/biometric-b1` (commit in §1). Authorisation: "B3.4 Revision 6 — Design Approved /
+Date: 20 Nov 2026; final review addendum 21 Nov 2026 (§11). Branch `feature/biometric-b1` (commit in §1). Authorisation: "B3.4 Revision 6 — Design Approved /
 Local Implementation Authorization". Design: BIOMETRIC_B3_4_PROJECTION_DESIGN.md revision 6.
 **Local only.** Nothing ran against hosted Supabase, staging or production; pg_cron was not installed or scheduled; no
 hardware was connected; projection was not enabled for any real company; nothing merged, tagged or deployed.
@@ -8,14 +8,15 @@ hardware was connected; projection was not enabled for any real company; nothing
 ## 1. Branch, commit, files
 
 Branch `feature/biometric-b1`; the commit that adds this report (see the completion message for the hash).
-Migration: `supabase/migrations/0012_biometric_projection.sql` (1,006 lines; md5 `2e48dbf08cf0e7c389cac22142f41f1b`).
+Migration: `supabase/migrations/0012_biometric_projection.sql` (1,058 lines after the §11 fix; md5 `2ae9515cef774482d9cdc273b0fd5bc0`;
+first version in commit 9d25d12 was 1,006 lines, md5 `2e48dbf08cf0e7c389cac22142f41f1b`).
 
 | File | Change |
 |---|---|
 | `supabase/migrations/0012_biometric_projection.sql` | **new** — the approved revision 6 SQL (A0–A9) plus the fixes in §7 |
-| `supabase/tests/biometric_projection_test.sql` | **new** — 210 checks, groups P F G S H T V A D B Q U |
+| `supabase/tests/biometric_projection_test.sql` | **new** — 226 checks, groups P F G S H T V A D B Q U R (R added in §11) |
 | `supabase/tests/preflight_test.sh` | **new** — design test P1 on a clean database at 0011 |
-| `supabase/tests/concurrency/projection_proof.sh` | **new** — 12 two-session proofs (§12.3, H8, Q1, Q5) |
+| `supabase/tests/concurrency/projection_proof.sh` | **new** — 15 two-session proofs (§12.3, H8, Q1, Q5; 9a/9b added in §11) |
 | `e2e/biometric_projection_http.py` | **new** — 17 checks over real HTTP (PostgREST) |
 | `supabase/tests/run.sh` | adds 0012 and its suite after the gateway suite |
 | `supabase/tests/concurrency/lock_proof.sh` | scenarios 3–6 now test the migrated wrapper (control removes its lock line); stand-in projection writes a plain row |
@@ -55,7 +56,8 @@ Application code (`src/`) is **unchanged** (`git diff d8146c9 HEAD -- src` is em
 | Q | due-only held punches (Q1–Q3), 1,000-punch days (Q4), continuation marks (Q7), stored invariant (Q8) | 11 | pass |
 | U | sources (CSV), pending, day_events, permissions, shift-gap warning, verification history, no template/image columns | 26 | pass |
 | fixture | local noon check | 1 | pass |
-| **SQL total** | `biometric_projection_test.sql` | **210** | **pass** |
+| R (§11) | delayed device-mode IN + OUT pairs: reconciled, rejected/flagged, lone, several, mixed app/biometric, re-presses, reversed, ambiguous, idempotence, budget | 16 | pass |
+| **SQL total** | `biometric_projection_test.sql` | **226** | **pass** |
 | Concurrency | `projection_proof.sh`: web check-in vs projection (20 rounds), correction vs projection (both orders), web check-out vs finalisation, two queue runs = one run, acceptance/review/mapping/ingest vs projection, accepted historic punch vs web check-in, not-due held punch not locked, mixed load ×5 | **12** | **pass**, 0 deadlocks |
 | Preflight | `preflight_test.sh` (P1) | **5** | **pass** |
 | HTTP | `biometric_projection_http.py` | **17** | **pass** |
@@ -77,7 +79,7 @@ same as one run.
 | `biometric_gateway_http.py` | 18/18 on a demo database with 0012 (projection off: "nothing reached attendance" still holds) |
 | `e2e/regression.py` (browser) | 29/29 on a demo database with 0012 — GPS cases, check-in/out, corrections, leave, exports, print, 208 screen loads |
 | `npm run check` / `npm run build` | 53/53; build ok (no app change) |
-| **Full database run** | **843 checks (633 + 210), exit status 0** |
+| **Full database run** | **859 checks (633 + 226), exit status 0** (after §11; was 843) |
 
 ## 5. Security and permission verification (executed)
 
@@ -150,11 +152,124 @@ before and after and fails loudly on any mismatch (6 checks pass).
 - **Hosted** limits (statement timeout, connection limits, cron worker) and performance at company scale are untested;
   local runs: 1,000-punch days in a few seconds.
 - **Short shift gaps (Q8):** warned, not prevented.
-- Device mode accepts an IN on a closed day only with a following OUT; if that OUT is later reconciled with an app
-  event in the same call the IN could remain open — not observed in tests, noted for B6 review.
+- ~~Device mode: an IN on a closed day followed by an OUT that is reconciled could remain open~~ — **reproduced and
+  fixed in §11** (it was a real defect; the earlier "not observed" was because no test covered it).
+- See §11.6 for the risks that remain after the fix.
 
 ## 10. Confirmation
 
 No hosted Supabase SQL, no staging/production migration, no pg_cron install or schedule, no hardware connection, no
 projection enabled for a real company, no credential or permission change outside local databases, no merge, tag or
 deployment. Local databases used: `attendos_test` (throwaway), copies for proofs, `attendos_demo` (local demo).
+
+## 11. Final review addendum (21 Nov 2026): delayed IN + reconciled OUT
+
+Request: "AttendOS B3.4 — Targeted Final Review: Delayed IN + Reconciled OUT". Local only; nothing hosted, no
+pg_cron, no hardware, projection not enabled for any real company, no merge, tag or deployment.
+
+### 11.1 Root cause and exact code path
+
+`biometric_project_day`, device branch (step 3a), session-safety rule for an IN on a finished (`closed`) day that
+would become the person's newest event. The first version looked only at the **direction of the next stored punch**:
+if it was an OUT, the IN was written and the OUT was left to its own later iteration. That OUT then met its own
+rules — reconciliation with an app/correction check-out within 5 minutes, double press, out of order, flagged or
+duplicate (so not even a candidate) — and could end up **not counted**. The IN stayed counted with nothing after it:
+`session_state` showed the person *working* on a past day. **Reproduced** by test R2 before the fix (IN projected, OUT
+reconciled with the web check-out, `session_state` = working on the earlier day).
+
+### 11.2 The change and why it is safe
+
+1. **Atomic pair.** The IN is counted only together with the OUT that closes it, decided in the same step by the same
+   rules the OUT would meet once the IN is counted: the first real punch after the IN must be an OUT that is a
+   candidate (stored, or undecided extra/reconciled), is not a double press of a counted biometric OUT, does not
+   reconcile with an app/correction OUT, and has no counted event between it and the IN. Re-presses of the IN within
+   the reconciliation window between the two are recorded `extra` (`double_press` within 60 s, else `repeat_in`) in
+   the same step. Otherwise the IN is **correction_needed** (`would_open_closed_day`) and the OUT is left to its own
+   rules. No checkout is ever created and both punches are never accepted blindly.
+2. **Ambiguous tail.** If an earlier punch of that day, after everything counted, is already correction_needed, no
+   later pair is guessed from it (the IN goes to correction_needed), so a second run cannot invent a different day.
+3. **Budget.** The pair costs 4 writes plus one per re-press and is written whole or not at all, under the same rule
+   (n + k ≤ limit − 1; the last write stays reserved for the continuation mark).
+4. **Re-press check moved (idempotence).** A same-direction punch within the reconciliation window of the counted
+   event **immediately before it** is `extra` (`repeat_in`/`repeat_out`). It used to be compared only with the day's
+   newest event and ran after the out-of-order check, so a re-press recorded inside a pair turned into
+   correction_needed (out_of_order) on the next run (found by R7). Effect elsewhere: a late re-press of a counted
+   punch is now `extra` instead of `correction_needed` — it is still never counted and stays visible for review.
+
+Unchanged: the closed-day protection, `open_session_other_day`, impossible transitions, the guard, holds, HR
+acceptance never bypassing session safety, first-in/last-out mode, the engine functions (none redefined).
+
+### 11.3 New tests (executed; output from `npm run test:db`)
+
+```
+ok - R1 delayed IN + OUT: both counted (dev slots), session off, rows match their raw punches
+ok - R1 engine: a closed 8-hour day (late: shift starts 08:00), not open; the person can check in on the web today
+ok - R2 the OUT reconciles with the app check-out, so the IN cannot be closed: IN correction_needed, OUT reconciled, only the app rows count
+ok - R2 no open session, the app rows keep their ids and are not duplicated; web check-in today works
+ok - R3 OUT a possible duplicate / unauthenticated (flagged) / without direction: the IN is correction_needed, the OUT keeps its own review status; nothing counted, no open session
+ok - R4 lone delayed IN that would be the newest event: correction_needed, no open session, web check-in works
+ok - R4 lone delayed IN that is NOT the newest event (later app day): counted, the day shows missing check-out (engine rule), the current session is untouched
+ok - R5 two delayed pairs: four rows, session off
+ok - R5 app morning + delayed biometric afternoon pair: both sessions counted, nothing duplicated
+ok - R5 a delayed pair inside an app session (12:00–13:00 within 08:00–17:00) is never slotted between counted events: both correction_needed
+ok - R6 IN pressed again (30 s, other device) and after 3 min, OUT pressed twice: one pair counted, the extra presses are extra
+ok - R6 reversed order (OUT 09:00, IN 17:00): both correction_needed, nothing counted
+ok - R6 IN, a second IN 10 min later, OUT: the pair is ambiguous, so nothing is guessed (all correction_needed), no open session
+ok - R7 projecting R1–R6 twice more changes no row, state, version or audit
+ok - R budget: limit 6 cannot hold the pair (4) + 2 skipped presses + reserve: nothing of it is written, all four stay stored
+ok - R budget: limit 9 writes the pair and both skipped presses in one call (6 writes)
+```
+
+Every R case also runs the invariant helper: each biometric row matches its raw punch (time, person, work date), every
+projected state points to its row, nothing left `stored`, `processed_at` set. Stable ids: R2 checks the app rows keep
+their ids; T/V/F9/G15 (unchanged) cover slot ids and correction references.
+
+Concurrency (`projection_proof.sh`, two real sessions):
+
+```
+   round 1: web -> true; day-1: in:biometric,out:biometric; punches: projected,projected; now: working:true; invariant violations 0; rerun changed: no
+   round 2: web -> true; day-1: none; punches: correction_needed:impossible_transition,correction_needed:impossible_transition; now: working:true; invariant violations 0; rerun changed: no
+   (rounds 3–6 alternate the same two outcomes)
+ok - 9a. delayed IN+OUT pair projected while the person checks in on the web (6 rounds, both orders): web check-in always succeeds; the pair is either written whole or sent whole to HR, never half; yesterday is never left open; a rerun changes nothing
+ok - 9b. delayed pair vs correction approval (approval_first): only the correction's in/out count, both punches are accounted for (after_correction,after_correction, then after_correction), yesterday is closed, a rerun changes nothing
+ok - 9b. delayed pair vs correction approval (projection_first): only the correction's in/out count, both punches are accounted for (held,held, then after_correction), yesterday is closed, a rerun changes nothing
+```
+
+### 11.4 Results after the fix (all executed 21 Nov 2026, exit status 0 unless stated)
+
+| Suite | Result |
+|---|---|
+| `biometric_projection_test.sql` | **226/226** (210 earlier + 16 R) |
+| Full database run (`npm run test:db`) | **859** checks (633 + 226), exit 0 |
+| `projection_proof.sh` | **15/15** (12 earlier + 9a + 9b ×2) |
+| `lock_proof.sh` / `gateway_proof.sh` | 21/21, 6/6 |
+| `preflight_test.sh` / `delete_company_test.sh` | 5/5, 6/6 |
+| `biometric_projection_http.py` / `biometric_gateway_http.py` | 17/17, 18/18 (demo rebuilt with the new 0012) |
+| `e2e/regression.py` (browser) | 29/29, including 208 screen loads |
+| `npm run check` / `npm run build` | 53/53; build ok (`src/` unchanged) |
+
+Write budgets: B1–B10 and Q4 unchanged and passing (1,000-punch days, budgets 1/5/9/10, run budgets); the pair step
+is covered by "R budget" (limit 6 writes nothing of the pair and leaves all four punches stored; limit 9 writes 6).
+
+### 11.5 Test fixes made along the way (no product change)
+
+- `biometric_core_test.sql` (0010 suite): the "secret part of the key appears nowhere" check took the secret with
+  `split_part(key, '_', 3)`; the secret's alphabet includes `_`, so about half of all keys gave a short fragment that
+  could match unrelated text (one run failed this way). It now takes everything after `bak_<12 hex>_`
+  (`substr(key, 18)`). Same meaning, no longer random.
+- `projection_proof.sh` scenario 8: the "no biometric check-in beside an app one" count now covers only the proof's
+  own people; the R fixtures include a legitimate split day (app morning, biometric afternoon) that the whole-database
+  count wrongly reported.
+
+### 11.6 Risks after the fix
+
+- **Order-dependent outcome (safe either way).** A delayed pair for yesterday that is projected *after* the person
+  has checked in on the web today goes to HR as `impossible_transition` (both punches); projected *before* it, the
+  pair is counted. Neither leaves a session open or half a pair. Counting the pair in both orders would mean relaxing
+  the cross-day "IN while a session is open" check for complete past pairs — **owner decision; not done**.
+- **Held during a pending correction.** If a pair is projected while a correction for that day is pending, both
+  punches are held and become `after_correction` only at their next due look (shown in 9b); until then they show as
+  "Waiting for HR".
+- **Pairs are conservative.** An IN with a second IN more than the reconciliation window later, an OUT pressed twice
+  far apart, or any correction_needed punch earlier in the uncounted tail sends the IN to HR rather than guessing.
+- Everything in §9 still applies (UI phase before enabling, pg_cron, hosted limits untested, no hardware).
