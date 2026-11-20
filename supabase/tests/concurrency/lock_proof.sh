@@ -2,8 +2,11 @@
 # Concurrency proofs on throwaway copies of the test database (run after supabase/tests/run.sh).
 #  1-2: 0010 mapping and review races (as migrated).
 #  7-9: mapping changes vs punch processing — lock key 41 protocol for 0011/0012, with controls that skip a lock.
-#  3-5: correction locking — the PROPOSED 0012 wrapper (proposed_correction_lock.sql) against a simulated projection
-#       that takes lock 7 like the real one will; each scenario runs on a fresh copy, with and without the wrapper.
+#  3-5: correction locking — the decide_correction wrapper as IMPLEMENTED in 0012 (since B3.4; before that the proposal
+#       proposed_correction_lock.sql was applied here) against a stand-in projection that takes lock 7 like the real one;
+#       each scenario runs on a fresh copy, as migrated ("with") and with the wrapper's lock removed ("without", control).
+#       The stand-in writes a plain row (source 'web'): 0012's guard lets only real projection write biometric rows;
+#       the real projection is exercised by projection_proof.sh.
 # Usage: PGHOST=/tmp/pg PGPORT=5433 PGUSER=postgres sh supabase/tests/concurrency/lock_proof.sh
 set -e
 cd "$(dirname "$0")"
@@ -67,7 +70,7 @@ setup_p() { # person P with a login, office roster today at Andheri, pending mis
         begin
           if use_lock then perform pg_advisory_xact_lock(hashtextextended(emp::text, 7)); end if;
           if exists (select 1 from attendance_events where employee_id = emp and work_date = d and kind = 'in' and superseded_by is null) then return 'not projected (day already has a check-in)'; end if;
-          insert into attendance_events (employee_id, kind, at, work_mode, verified, source, work_date) values (emp, 'in', t, 'office', false, 'biometric', d);
+          insert into attendance_events (employee_id, kind, at, work_mode, verified, source, work_date) values (emp, 'in', t, 'office', false, 'web', d);
           return 'projected';
         end \$\$;" > /dev/null
   PE=$(q $1 "select id from employees where email = 'proof@acme.in'")
@@ -79,7 +82,9 @@ ins_count() { q $1 "select count(*) from attendance_events where employee_id = '
 for MODE in without with; do
   # 3. correction approval vs biometric projection for the same day
   DB=bio_lock_$MODE; fresh $DB; setup_p $DB
-  [ $MODE = with ] && psql -X -q -v ON_ERROR_STOP=1 -d $DB -f proposed_correction_lock.sql > /dev/null
+  # control: the same wrapper without its lock line (the migrated wrapper is used as is in "with")
+  [ $MODE = without ] && q $DB "do \$d\$ begin execute replace(pg_get_functiondef('decide_correction(bigint,boolean,text)'::regprocedure),
+          'perform pg_advisory_xact_lock(hashtextextended(emp::text, 7));', ''); end \$d\$" > /dev/null
   D="local_today((select company_id from employees where id = '$PE')) - 1"
   ( { as_user $HR; echo "begin; select decide_correction($CID, true) ->> 'ok'; select pg_sleep(2); commit;"; } | psql -X -q -At -d $DB > /tmp/corr_$MODE.txt 2>&1 ) &
   sleep 0.5
@@ -230,7 +235,6 @@ for d in bio_map_ingest_protocol bio_map_ingest_nolock bio_map_review_protocol b
 
 # 6. existing correction behaviour is unchanged with the wrapper (approve, reject rules, own request, other company, audit)
 DB=bio_lock_regress; fresh $DB; setup_p $DB
-psql -X -q -v ON_ERROR_STOP=1 -d $DB -f proposed_correction_lock.sql > /dev/null
 R=$( { as_user $P; echo "select decide_correction($CID, true) ->> 'message';"; } | psql -X -q -At -d $DB 2>&1 | tail -1)
 case "$R" in *"own request"*|*"Not allowed"*) ok "wrapper: an employee still cannot decide (own request refused)";; *) bad "own request: $R";; esac
 R=$( { as_user 00000000-0000-0000-0000-0000000000b0; echo "select decide_correction($CID, true);"; } | psql -X -q -At -d $DB 2>&1 | grep -m1 "ERROR")

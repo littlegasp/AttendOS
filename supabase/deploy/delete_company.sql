@@ -90,6 +90,9 @@ begin
   delete from public.biometric_event_state where company_id = cid;
   delete from public.biometric_event_reviews where company_id = cid;
   delete from public.biometric_event_errors where company_id = cid;
+  -- 0012: projected attendance rows point at raw events and devices (on delete restrict), so attendance goes first
+  delete from public.attendance_coords where event_id in (select e.id from public.attendance_events e join public.employees p on p.id = e.employee_id where p.company_id = cid);
+  delete from public.attendance_events where employee_id in (select id from public.employees where company_id = cid);
   delete from public.biometric_raw_events where company_id = cid;
   delete from public.biometric_sync_runs where company_id = cid;
   delete from public.biometric_employee_mappings where company_id = cid;

@@ -1,3 +1,5 @@
+-- SUPERSEDED (B3.4, 20 Nov 2026): this wrapper is now part of migration 0012_biometric_projection.sql (section A7) and
+-- lock_proof.sh tests the migrated version. Kept for the record of the B3.2 proof; it is not applied by any script.
 -- PROPOSAL for migration 0012 (not a migration; not applied by run.sh). Applied only to throwaway copies by
 -- lock_proof.sh to prove the locking design. Same rename-and-wrap pattern as 0006/0008.
 -- decide_correction() takes the per-person lock used by punch() (key 7) before anything else, so a correction

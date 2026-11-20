@@ -314,6 +314,12 @@ queue has run-level write budgets. Revision 5 (20 Nov 2026): the guard re-valida
 (time, raw punch, device, import batch, device office) against the raw punch on any change; write budgets are strict
 (no lower clamp, one write reserved for continuation, slot step all-or-nothing, fewer than 6 writes → day deferred);
 a failed call costs one error record. Revision 6 (20 Nov 2026): the guard refuses any change of an attendance
-row's source (web/correction can never become biometric/import, nor the reverse). Still design only; awaiting final
-approval before 0012 is written.
+row's source (web/correction can never become biometric/import, nor the reverse). Revision 6 approved for LOCAL
+implementation (20 Nov 2026). **B3.4 implemented locally:** `supabase/migrations/0012_biometric_projection.sql`
+(projection, guard, held/queue procedure, correction wrapper, verification label, read functions) with
+`biometric_projection_test.sql` (210 checks), `preflight_test.sh`, `concurrency/projection_proof.sh`,
+`e2e/biometric_projection_http.py`; deletion script reordered; read-only hosted checks extended. Full database run 843
+checks. Not run on any hosted project; pg_cron not installed; projection off for every real company; the UI items
+(provisional display, labels, CSV Source column) are NOT built yet — projection must stay off until they are.
+Report: docs/biometric/BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md. Awaiting owner review.
 

@@ -51,12 +51,27 @@ checks(item, ok, detail) as (
   select '12. No sample/demo data present', not exists (select 1 from public.companies where slug in ('acme', 'beta', 'gamma', 'perf'))
          and not exists (select 1 from public.audit_log where source = 'seed'), 'demo/perf scripts must never run here'
   union all
-  select '13. Biometric 0010 (if installed): credentials unreadable, payload columns not granted, 12 checked functions only',
+  select '13. Biometric (if installed): credentials unreadable, payload columns not granted, only the checked functions (12 from 0010, +1 with 0011, +4 with 0012)',
          case when to_regclass('public.biometric_raw_events') is null then true else
            not has_table_privilege('authenticated', to_regclass('public.biometric_agent_credentials'), 'select')
            and not has_column_privilege('authenticated', to_regclass('public.biometric_raw_events'), 'raw_payload', 'select')
            and not has_column_privilege('authenticated', to_regclass('public.biometric_event_errors'), 'payload', 'select')
-           and (select count(*) from fns where proname like 'biometric\_%' and has_function_privilege('authenticated', oid, 'execute')) = 12 end,
+           -- 12 from 0010, + biometric_set_device_auth (0011), + project_now, day_pending, shift_gap_warnings, retry_day (0012)
+           and (select count(*) from fns where proname like 'biometric\_%' and has_function_privilege('authenticated', oid, 'execute'))
+               = 12 + case when exists (select 1 from fns where proname = 'biometric_ingest') then 1 else 0 end
+                    + case when exists (select 1 from fns where proname = 'biometric_project_day') then 4 else 0 end end,
          case when to_regclass('public.biometric_raw_events') is null then 'not installed' else 'installed' end
+  union all
+  select '14. Biometric 0012 (if installed): projection internals and decide_correction_core callable by no client role; guard present; projection off unless deliberately enabled',
+         case when not exists (select 1 from fns where proname = 'biometric_project_day') then true else
+           not exists (select 1 from fns where proname in ('biometric_project_day', 'biometric_run_projection', 'biometric_project_one', 'biometric_set_role',
+                         'biometric_write_slot', 'biometric_work_date_at', 'biometric_day_close_at', 'biometric_hold_next_check', 'biometric_day_failures',
+                         'attendance_external_guard', 'decide_correction_core')
+                         and (has_function_privilege('anon', oid, 'execute') or has_function_privilege('authenticated', oid, 'execute')))
+           and exists (select 1 from pg_trigger where tgname = 'external_guard' and tgrelid = 'public.attendance_events'::regclass and tgenabled = 'O')
+           and not exists (select 1 from public.attendance_events where source not in ('web', 'correction', 'biometric', 'import')) end,
+         case when not exists (select 1 from fns where proname = 'biometric_project_day') then 'not installed' else
+           'installed; projection enabled for: ' || coalesce((select string_agg(c.slug, ', ') from public.biometric_settings b join public.companies c on c.id = b.company_id
+                                                              where b.projection_enabled), 'no company') end
 )
 select item, ok, detail from checks order by split_part(item, '.', 1)::int;

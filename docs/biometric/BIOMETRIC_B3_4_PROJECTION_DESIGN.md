@@ -852,6 +852,11 @@ directly; the schedule is verified on hosted only after separate approval (Q1).
 
 ## 13. Implemented vs proposed
 
+**Update 20 Nov 2026 (after approval of revision 6):** migration 0012 is now **implemented and tested locally** —
+see BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md (843 database checks, 12 concurrency proofs, 17 HTTP checks, regression
+suites; deviations listed there in §7). The UI items of §11 are not implemented yet. The table below is the state at
+design time.
+
 | Item | State |
 |---|---|
 | Migrations 0010 (core) and 0011 (gateway) | **Implemented, locally tested, approved for local development.** Not hosted. |

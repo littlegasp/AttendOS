@@ -609,6 +609,9 @@ null-safe malformed events, device-derived source_auth, GET refused, heartbeat a
 key absent from the PostgREST log, the Postgres server log, audit log, sync-run answers and error records · company
 deletion **4** · app regression **29** · app checks **53** · clean migration 0001–0011 without errors.
 (Revision 4 of this section listed the earlier counts 67 gateway / 13 HTTP / 621 database; corrected here.)
+**Correction (B3.4, 20 Nov 2026):** "company deletion **4**" above is wrong — the r5 evidence file shows **3** ok
+lines. The fourth check (raw-event triggers re-enabled) compared against a hard-coded 3 and had silently not printed
+since 0011 added a fourth trigger. The test was made strict in B3.4 (see BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md §8).
 
 ### 13.8 Revision 5 — what the gateway can and cannot prove (B3.3 review, 20 Nov 2026)
 | Fact | Proven? | How |

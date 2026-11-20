@@ -1,4 +1,4 @@
--- AttendOS biometric: READ-ONLY prerequisite check for the hosted project, before migration 0010 (and later 0012).
+-- AttendOS biometric: READ-ONLY prerequisite check for the hosted project, before migrations 0010–0012.
 -- Run in the Supabase SQL editor (role postgres). It changes nothing: no extension is created, no setting changed.
 -- Every row shows what is needed, what the project has, and whether that is enough.
 with
@@ -46,4 +46,8 @@ select 11, 'Default privileges in public (does Supabase auto-grant new tables/fu
        coalesce((select string_agg(pg_get_userbyid(d.defaclrole) || ' ' || d.defaclobjtype::text || ': ' || array_to_string(d.defaclacl, ','), ' | ')
                    from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace where n.nspname = 'public'), 'none'),
        true, 'information — 0010 revokes explicitly either way'
+union all
+select 12, 'attendance_events.source values before 0012 (0012 stops unless only web/correction exist; history is never edited)',
+       coalesce((select string_agg(coalesce(source, 'NULL') || ' ' || n, ', ' order by source) from (select source, count(*) n from public.attendance_events group by source) x), 'no rows'),
+       not exists (select 1 from public.attendance_events where source is null or source not in ('web', 'correction', 'biometric', 'import')), '0012 preflight'
 order by n;
