@@ -341,3 +341,11 @@ Report: docs/biometric/BIOMETRIC_B4_UI_REPORT.md. Not deployed; needs the hosted
 Accessibility polish (21 Nov 2026): source badges meet WCAG AA in both themes (5.83–8.96:1) with a marker shape per
 source; status badges unchanged; B4 browser 61/61, app checks 66/66.
 
+**B5 — Local Sync Agent design (21 Nov 2026, design only):** architecture and implementation plan for the Windows
+agent (.NET 10 Windows Service, x86 vendor-SDK host, SQLCipher queue with DPAPI keys, outbound HTTPS only, LAN-bound
+push receiver, mock adapters first). Written from the 0010–0012 code, with a table of where the B1 agent documents
+differ (batch ≤ 200 events / 256 KB, heartbeat stores only version + reachability + drift, no agent self-rotation, push
+punches always flagged). Milestones M0–M10, failure scenarios, STRIDE threat model, API contract, compatibility matrix
+(nothing hardware-verified) and 21 open decisions: docs/biometric/BIOMETRIC_B5_SYNC_AGENT_DESIGN.md. No code, migration
+or hosted change. **Awaiting owner review and separate implementation authorisation.**
+
