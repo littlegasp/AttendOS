@@ -3,6 +3,8 @@
 Status: **DOCUMENTATION AND ARCHITECTURE ONLY — for owner review.** No code, migration, hosted SQL, device
 connection, device-setting change or eSSL software install. Date 21 Nov 2026. Branch `feature/biometric-b1`.
 
+**DAT format observed (21 Nov 2026): BIOMETRIC_DAT_FORMAT.md records the supplied X2008 export (151 records, 6 tab-separated fields, CRLF) and replaces §4.3's pending record.**
+
 **Revision 4 (DAT import readiness): BIOMETRIC_B5_REV4_DAT_IMPORT.md takes precedence for the DAT path.**
 
 **Document history:** Revision 1 (generic agent, `a1b4773`) → Revision 2 (eSSL first, `1cab101`) → **Revision 3

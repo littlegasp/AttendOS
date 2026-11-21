@@ -376,3 +376,11 @@ known); duplicate labels across DAT, SDK and ADMS without discarding rows; reten
 be cleaned); 50 tests. Found: historical DAT rows can't become raw events under the 31-day guard (R13).
 docs/biometric/BIOMETRIC_B5_REV4_DAT_IMPORT.md. Migration 0013 not written.
 
+**X2008 DAT format recorded (21 Nov 2026, documentation only):** owner inspected the supplied export (151 records,
+6,191 bytes, UTF-8 without BOM, TAB, CRLF with final newline, 6 fields, field 1 right-aligned to 9 characters with
+leading spaces, `YYYY-MM-DD HH:MM:SS`, 2–21 Nov 2026, 17 codes, no duplicates). docs/biometric/BIOMETRIC_DAT_FORMAT.md:
+format profile `essl.x2008.attlog/1`, code extraction (remove leading spaces only; never numeric), timestamp rule,
+fields 3–6 unknown and never interpreted, parser tests P1–P23, real-file check (local only), open questions Q1–Q10
+(the device showed 31,207 records; the export has 151 — not treated as full history). 22 synthetic fixtures in
+tests/fixtures/dat (no real data; real exports ignored by .gitignore). Code `10` → WR198 remains the only mapping.
+

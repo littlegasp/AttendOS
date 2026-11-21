@@ -12,6 +12,8 @@ or SQL code; no SQL run; no device connection or settings change; no eSSL softwa
 This revision does **not** redesign or merge the paths. It makes path 1 ready to build. Where this document and
 Revision 3 §4 differ, this document wins. The agent design (Revisions 1–3) is unchanged.
 
+**Update 21 Nov 2026:** the X2008 export has now been inspected. The format record, the leading-space code extraction rule and the parser tests are in BIOMETRIC_DAT_FORMAT.md, which takes precedence over §3 and §5.1 here where they differ (its §9 lists the changes).
+
 **Still pending:** an original `.dat` file has not yet been supplied. Every format rule below that depends on the file
 is written as a **check against the M1 format record** ("M1 says …"), not as a guess about the format.
 
@@ -512,7 +514,7 @@ the same code and time.
 | T-FM5 | **Malformed rows under threshold** (1 %) | READY_FOR_REVIEW; each kept as `unparsable` with reason; counts exact; row count = line count |
 | T-FM6 | **Malformed rows over threshold** (3 %) | FAILED `too_many_malformed_rows`; nothing kept |
 | T-FM7 | **UTF-8 BOM, CRLF, no final newline** | accepted; downloaded original byte-identical; terminators recorded per line |
-| T-FM8 | **Codes `10`, `010`, `0010`, ` 10`** | first three distinct `ok` codes; ` 10` is `code_invalid`; none trimmed |
+| T-FM8 | **Codes `10`, `010`, `0010`, ` 10`, `10 `** | first three distinct `ok` codes; ` 10` (leading space in field 1) extracts to `10` by the X2008 rule (BIOMETRIC_DAT_FORMAT.md §4); `10 ` (trailing) is `code_invalid`; raw field always kept |
 | T-FM9 | **200,001 rows** | refused `too_many_rows`; nothing kept |
 | T-TZ1 | **Impossible dates** (`2026-02-30`, hour 24, minute 60, year 1999) | string unchanged; `local_ts` null; `time_status` correct; row kept |
 | T-TZ2 | **Declared zone with DST** (e.g. Europe/London): gap time and overlap time | `nonexistent_local_time` / `ambiguous_local_time`; `instant` null; mapping `undetermined_time` |

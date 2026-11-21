@@ -56,3 +56,6 @@ supabase/demo/pgrst.log
 
 # local demo PostgREST log
 pgrst.log
+
+# real device attendance exports must never be committed (synthetic fixtures live in tests/fixtures/dat)
+*_attlog*.dat
