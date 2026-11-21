@@ -1,6 +1,9 @@
 # Biometric B4 — application UI integration (local implementation and test report)
 
-Date: 21 Nov 2026. Branch `feature/biometric-b1` (commit: see the completion message). Authorisation: "AttendOS — B3.4
+Date: 21 Nov 2026 (accessibility polish and completion record added the same day, §10). Branch `feature/biometric-b1`.
+**Commits:** functional B4 `645b92741e40468f4671aac409e564d9af2af6f9`; accessibility polish
+`6bfea2aae354eb64f957cdb9fd663857e150fd3c`; this report is committed on top of that (the final HEAD hash is in §10's
+note and in the completion message, since a commit cannot contain its own hash). Authorisation: "AttendOS — B3.4
 Owner Decision + B4 Local Implementation Authorization". **Local only:** nothing ran against hosted Supabase; no
 pg_cron; no hardware; projection is off for every company; nothing merged, tagged or deployed; no invitations sent.
 
@@ -70,7 +73,8 @@ Concurrency proofs were not re-run: no SQL changed since they last passed (17/17
 Dark and light × 390 / 820 / 1440 px × biometric overview, review queue, register, My Attendance (+ the day timeline on
 phone and tablet): 24 loads, no sideways page scrolling, no console errors. Register and history tables still fit at
 1440 px with the Source column (checked). Contrast measured as painted: source badges 3.76:1 (light) / 3.94:1 (dark),
-at least as readable as the existing status badges (2.67:1 / 3.94:1) — see risks.
+at least as readable as the existing status badges (2.67:1 / 3.94:1) — **superseded by §10: all source badges now meet
+WCAG AA (5.83–8.96:1).**
 
 ### CSV sample (register, daily, first lines)
 ```
@@ -117,8 +121,8 @@ is off for every company after the tests.
 - **Hosted order of work:** this frontend expects migrations 0010–0012. On a database without them it degrades safely
   (module "not set up", Source column blank, timeline "not available"), but it must not be deployed before the owner
   approves the hosted migrations.
-- **Badge contrast in the light theme** is below WCAG AA for small text across the existing badge system (status badges
-  2.67:1; new source badges 3.76:1). Not changed here — it is a design-system decision (glass theme kept as instructed).
+- **Status badge contrast** (existing design system, not changed): light theme as low as 2.67:1 for small text. The
+  source badges were fixed in §10; the status badges need a separate design decision.
 - **Order-dependent projection outcome** (B3.4 §11.6) shows up in real use: if today's punches are projected before an
   older day, the older day's punches go to HR as impossible transitions. The demo data is ingested oldest first.
 - **Imported punches** are stored but never counted yet (`import_not_enabled`), so no counted "Imported" row can exist;
@@ -131,3 +135,85 @@ is off for every company after the tests.
 No hosted Supabase SQL or permission change, no pg_cron, no hardware connection, projection not enabled for any real
 company (the local demo company only, inside the demo script, switched off again), no credential change, no
 invitations, no merge, no tag, no deployment. Local databases only: `attendos_test`, throwaway copies, `attendos_demo`.
+
+## 10. Accessibility polish and completion record (21 Nov 2026)
+
+Request: "AttendOS B4 — Final Accessibility Polish and Completion Record". Local only; B4 screens not redesigned; no
+migration changed (`git diff 645b927 -- supabase/migrations` is empty).
+
+### 10.1 Source badge contrast — fixed
+
+Source badges (`SourceBadge` in `src/components/SourceBadges.tsx`, class `.src-badge` in `globals.css`) now use their
+own colours, built only from the existing semantic tokens:
+
+- text = the source tone mixed 55 % with `--color-text` (lighter in dark, darker in light);
+- background = the tone at 14 % over `--color-surface` (opaque, so the glass behind it cannot lower the contrast);
+- a 1-px outline in the tone; no brightness filter.
+
+Tones are unchanged (Web neutral, Biometric and Imported info blue, Correction amber), so the sources stay
+distinguishable. Each source also has its own **marker shape**: Web a filled dot, Biometric a ring, Imported a square
+with a **dashed outline**, Correction a diamond. Together with the text label, colour is never the only cue.
+
+Status badges, the glass theme and the orange accent are **not** changed (a unit test checks that the base badge rule
+and the light-theme status filter are unchanged). The verification history uses the same source badge.
+
+**Final contrast ratios** (WCAG AA needs ≥ 4.5:1). Two independent measurements give the same numbers:
+
+| Source | Light theme | Dark theme | Before (light / dark) |
+|---|---|---|---|
+| Web | **7.05:1** | **8.54:1** | 3.76 / 3.94 |
+| Biometric | **7.32:1** | **7.39:1** | 3.99 / 3.94 |
+| Imported | **7.32:1** | **7.39:1** | 3.99 / 3.94 |
+| Correction | **5.83:1** | **8.96:1** | not measured in the browser (2.67 light by calculation) |
+
+1. Computed from the tokens in `globals.css` (unit test `B4 source badges meet WCAG AA…`).
+2. Measured as painted in Chrome on the Register, the corrected day, an imported punch's timeline and the verification
+   history, in both themes. The browser test records `b4-contrast.json` and uses the lowest value found per source.
+
+### 10.2 Visual regression
+
+Nine screens were checked: Biometric overview, device list, mapping, sync activity, review queue, Attendance Register,
+My Attendance, the day timeline and the verification history. Each ran in dark and light at 390, 820 and 1440 px.
+
+- **54 screen loads:** no sideways page scrolling and no console errors. The timeline dialog stays within the screen.
+- **Keyboard focus:** a visible outline was checked on the review queue in both themes.
+- **Screenshots:** each screen is in the evidence ZIP (`screenshots/<screen>-<size>-<theme>.png`).
+
+### 10.3 Final test results (all executed 21 Nov 2026 after the polish)
+
+| Suite | Result |
+|---|---|
+| `e2e/biometric_b4.py` | **61/61** (adds the painted contrast check per theme and the 54-load visual regression; the earlier relative-contrast checks were replaced) |
+| `npm run check` | **66/66** (adds the token contrast test and the marker-shape / no-status-change test) |
+| `e2e/regression.py` | **29/29** |
+| `npm run test:db` | **872** |
+| HTTP gateway / projection | **18/18**, **17/17** |
+| `npm run build` | ok |
+
+### 10.4 Files changed by the polish
+
+`src/app/globals.css` (the `.src-badge` block), `src/components/SourceBadges.tsx` (`SourceBadge`),
+`src/components/DayTimeline.tsx` (uses `SourceBadge`), `src/components/LocationsPanel.tsx` (same badge in the verification
+history), `tests/b4.test.ts`, `e2e/biometric_b4.py`, and this report. The full B4 file list is in §3.
+
+### 10.5 Remaining limitations
+
+- The existing **status badges** are not changed. In the light theme they are as low as 2.67:1 for small text, and
+  fixing them is a separate design-system decision.
+- **Wide tables on phones** (verification history, register) still scroll inside their card, as they did before B4. The
+  page itself does not scroll sideways.
+- **Hosted migrations first:** the frontend needs migrations 0010–0012 before it is deployed. Without them it degrades
+  safely (§8).
+- **Earlier B4 limitations still apply:**
+  - Order-dependent projection (B3.4 §11.6).
+  - Imported punches are stored but never counted yet.
+  - Sync Agent registration and device communication keys have no screen.
+  - The B2 demonstration browser suite now applies to preview mode only.
+
+### 10.6 Completion record
+
+- **Branch:** `feature/biometric-b1`. Not merged, no tag, not deployed.
+- **Commits:** `645b92741e40468f4671aac409e564d9af2af6f9` B4 functional; `6bfea2aae354eb64f957cdb9fd663857e150fd3c` accessibility polish. This report
+  update is the next commit, and its exact hash (the final HEAD) is in the completion message.
+- **Not touched:** no hosted SQL, no hosted migration or permission change, no pg_cron, no hardware, no real-company
+  projection, no credential change.

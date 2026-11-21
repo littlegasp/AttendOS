@@ -338,4 +338,6 @@ day timeline (`day_events`); provisional check-out shown apart from final hours 
 through the checked database functions (preview keeps the B2 demonstration). No new migration. Tests: browser B4 60/60,
 app checks 64, regression 29/29, database 872, HTTP 18 + 17. Local demo data: `supabase/demo/biometric_demo.sql`.
 Report: docs/biometric/BIOMETRIC_B4_UI_REPORT.md. Not deployed; needs the hosted migrations (separate approval) first.
+Accessibility polish (21 Nov 2026): source badges meet WCAG AA in both themes (5.83–8.96:1) with a marker shape per
+source; status badges unchanged; B4 browser 61/61, app checks 66/66.
 
