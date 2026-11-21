@@ -10,8 +10,8 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 | B3 Database + gateway | 0010 core tables, 0011 `biometric_ingest`, heartbeat, keys, normalisation, idempotency, errors | **Implemented and locally tested; approved for local development** (BIOMETRIC_B3_1_DB_DESIGN.md r5.1). Not hosted. |
 | B3.4 Attendance projection (0012) | Projection under the punch lock, slots, provisional out, gate, holds, correction wrapper, `day_events`, labels | **Implemented and locally tested** (migration 0012; BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md). Not hosted; pg_cron not installed; UI items not built; projection off for real companies. |
 | B4 Application UI | Source labels, timeline, provisional out, CSV Source, live device screens | **Implemented and locally tested** (BIOMETRIC_B4_UI_REPORT.md). Not deployed. |
-| B5 Sync Agent | Windows Service, encrypted queue, uploader, heartbeat, mock adapters, push receiver, installer | **Design written — awaiting owner review** (BIOMETRIC_B5_SYNC_AGENT_DESIGN.md, milestones M0–M10). Not yet implemented. |
-| B5 M8–M9 First real adapter + pilot | On the hardware chosen in D9 | Not yet implemented — needs hardware |
+| B5 Sync Agent | Windows Service, encrypted queue, uploader, heartbeat, mock adapters, push receiver, installer | **Design written — awaiting owner review** (revision 1: BIOMETRIC_B5_SYNC_AGENT_DESIGN.md; revision 2, eSSL first: BIOMETRIC_B5_ESSL_FIRST_DESIGN.md, milestones M0–M12). Not yet implemented. |
+| B5 M8–M10 First real adapter + pilot | eSSL (owner decision 21 Nov 2026); model and firmware not yet chosen (E1) | Not yet implemented — needs hardware |
 | B6 Register drawer and review processing UI | Screens on top of the 0012 projection | Not yet implemented |
 | B7 Other manufacturers | eSSL / Matrix / others | Not yet implemented |
 | B8 Readiness review | Security, isolation, reliability, retention, performance, hosting | Not yet implemented |

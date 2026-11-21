@@ -3,6 +3,8 @@
 Status: **DESIGN ONLY — for owner review.** No code, migration, hosted operation or hardware connection is part of
 this document. Date 21 Nov 2026. Branch `feature/biometric-b1` (design document only; base `5b7d32e`).
 
+**Revision 2 (eSSL first, 21 Nov 2026): BIOMETRIC_B5_ESSL_FIRST_DESIGN.md takes precedence where the two differ.**
+
 It replaces the B1 proposal (BIOMETRIC_SYNC_AGENT.md, BIOMETRIC_ADAPTER_DEVELOPMENT.md) where the two differ. The
 B1 documents stay as history.
 

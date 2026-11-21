@@ -349,3 +349,10 @@ punches always flagged). Milestones M0–M10, failure scenarios, STRIDE threat m
 (nothing hardware-verified) and 21 open decisions: docs/biometric/BIOMETRIC_B5_SYNC_AGENT_DESIGN.md. No code, migration
 or hosted change. **Awaiting owner review and separate implementation authorisation.**
 
+**B5 revision 2 — eSSL first (21 Nov 2026, design only):** owner decision: eSSL is the first manufacturer (model and
+firmware unknown). docs/biometric/BIOMETRIC_B5_ESSL_FIRST_DESIGN.md: eSSL SDK pull, ADMS push and ePushServer
+research with sources; K30 Pro / X990 as research examples (nothing hardware-verified); direct integration, no eSSL
+server software; event normalization (user codes stay text, original time never altered); new rule from the gateway's
+conflict check: the payload holds only device-produced values (`essl/1`), never agent metadata; offline/recovery
+matrix; mock eSSL test plan T1–T15; purchase checklist; milestones M0–M12; decisions E1–E12. No code or migration.
+
