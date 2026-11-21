@@ -11,6 +11,8 @@ const STATUS: Record<SyncRun["status"], { s: "verified" | "pending" | "failed"; 
   partial: { s: "pending", l: "Partly stored" },
   retrying: { s: "pending", l: "Retrying" },
   failed: { s: "failed", l: "Failed" },
+  running: { s: "pending", l: "Running" },
+  replay: { s: "verified", l: "Replayed (already stored)" },
 };
 
 export function SyncTable({ runs, openDevice, showDevice = true }: { runs: SyncRun[]; openDevice?: (id: string) => void; showDevice?: boolean }) {
@@ -40,7 +42,7 @@ export function SyncTable({ runs, openDevice, showDevice = true }: { runs: SyncR
               <tr key={r.id}>
                 <td>{fmtTime(r.started, tz)}<span className="tiny muted block">{ago(r.started, now)}</span></td>
                 {showDevice ? (
-                  <td>{d && openDevice ? <button type="button" className="link-btn" onClick={() => openDevice(d.id)}>{d.name}</button> : d?.name ?? "—"}</td>
+                  <td>{d && openDevice ? <button type="button" className="link-btn" onClick={() => openDevice(d.id)}>{d.name}</button> : d?.name ?? (r.agentId && state.agents.some((a) => a.id === r.agentId) ? <span className="muted">All devices of {state.agents.find((a) => a.id === r.agentId)!.name}</span> : "—")}</td>
                 ) : null}
                 <td><StatusBadge status={STATUS[r.status].s} label={STATUS[r.status].l} /></td>
                 <td className="num">{r.received}</td>
@@ -63,7 +65,7 @@ export function SyncTable({ runs, openDevice, showDevice = true }: { runs: SyncR
 }
 
 export function SyncActivity({ openDevice }: { openDevice: (id: string) => void }) {
-  const { state, may } = useDemo();
+  const { state, may, live } = useDemo();
   const [device, setDevice] = useState("");
   const [status, setStatus] = useState("");
   const runs = useMemo(
@@ -89,7 +91,7 @@ export function SyncActivity({ openDevice }: { openDevice: (id: string) => void 
           </select>
         </label>
         <span className="grow" />
-        {may("retryBiometricSync") ? <NotYet label="Retry failed syncs" phase="B3–B4" /> : null}
+        {may("retryBiometricSync") ? <NotYet label="Retry failed syncs" phase="Agent" /> : null}
       </div>
       <p className="meta" aria-live="polite">
         {runs.length} runs · {totals.received} received · {totals.stored} stored · {totals.dup} confirmed duplicates · {totals.poss} possible duplicates · {totals.un} unmatched · {totals.rej} rejected
@@ -97,7 +99,7 @@ export function SyncActivity({ openDevice }: { openDevice: (id: string) => void 
       <SyncTable runs={runs} openDevice={openDevice} />
       <p className="meta">
         Confirmed duplicates had the same identity as a punch already stored and were not stored again. Possible duplicates are stored and sent to the review queue. Retries are
-        made by the Sync Agent with increasing delays; in this demonstration they are only shown.
+        made by the Sync Agent with increasing delays{live ? "; Unmatched counts the punches of each run still waiting for a mapping." : "; in this demonstration they are only shown."}
       </p>
     </GlassCard>
   );

@@ -75,7 +75,7 @@ export const MATRIX: Record<Capability, Record<Role, Scope>> = {
   manageLeave: { admin: "all", hr: "all", manager: "none", employee: "none" }, // leave types, balance adjustments, record leave for someone
   decideLeave: { admin: "all", hr: "all", manager: "team", employee: "none" },
   exportReports: { admin: "all", hr: "all", manager: "team", employee: "own" }, // exports follow the same scope as the screen
-  biometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // open Biometric Devices (B2: demonstration data only)
+  biometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // open Biometric Devices (B4: company records; demonstration in preview)
   manageBiometricDevices: { admin: "all", hr: "none", manager: "none", employee: "none" }, // add, configure, disable devices (technical setup)
   mapBiometricCodes: { admin: "all", hr: "all", manager: "none", employee: "none" }, // map / end device-specific employee codes
   mapBiometricCompanyWide: { admin: "all", hr: "none", manager: "none", employee: "none" }, // company-wide codes: explicit Admin decision
@@ -134,7 +134,7 @@ export const CAP_LABEL: Record<Capability, string> = {
   manageLeave: "Leave types & balances",
   decideLeave: "Approve leave",
   exportReports: "Export reports",
-  biometric: "Biometric devices (demonstration)",
+  biometric: "Biometric devices",
   manageBiometricDevices: "Add / configure / disable biometric devices",
   mapBiometricCodes: "Map device employee codes (one device)",
   mapBiometricCompanyWide: "Company-wide device codes",

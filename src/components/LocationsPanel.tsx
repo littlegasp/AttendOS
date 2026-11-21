@@ -464,7 +464,7 @@ interface LogRow {
   at: string;
   employee: string;
   kind: string;
-  outcome: "verified" | "not_required" | "corrected" | "refused";
+  outcome: "verified" | "not_required" | "corrected" | "refused" | "biometric" | "imported";
   work_mode: string | null;
   location: string | null;
   distance_m: number | null;
@@ -527,7 +527,7 @@ export function VerificationHistory() {
                     <th scope="row">{r.employee}</th>
                     <td>{r.kind === "in" ? "Check-in" : "Check-out"}</td>
                     <td>
-                      {r.outcome === "verified" ? <StatusBadge status="verified" /> : r.outcome === "refused" ? <StatusBadge status="failed" label={REASON[r.reason ?? ""] ?? "Refused"} /> : r.outcome === "corrected" ? <StatusBadge status="pending" label="Correction" /> : <StatusBadge status="weekly-off" label="No location needed" />}
+                      {r.outcome === "verified" ? <StatusBadge status="verified" /> : r.outcome === "refused" ? <StatusBadge status="failed" label={REASON[r.reason ?? ""] ?? "Refused"} /> : r.outcome === "corrected" ? <StatusBadge status="pending" label="Correction" /> : r.outcome === "biometric" ? <span className="badge tone-info" title="Recorded by a biometric device for the mapped employee code. Not GPS-verified."><span className="badge-dot" aria-hidden="true" />Biometric · not GPS-verified</span> : r.outcome === "imported" ? <span className="badge tone-info" title="Taken from an imported device file. Not GPS-verified."><span className="badge-dot" aria-hidden="true" />Imported · not GPS-verified</span> : <StatusBadge status="weekly-off" label="No location needed" />}
                     </td>
                     <td>{r.work_mode === "remote" ? "Remote" : r.location ?? "—"}</td>
                     <td>{r.distance_m !== null ? `${r.distance_m} m` : "—"}</td>

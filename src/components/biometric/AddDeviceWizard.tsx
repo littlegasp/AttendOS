@@ -43,7 +43,8 @@ const EMPTY: Draft = { manufacturer: "", name: "", model: "", serial: "", office
 const LAN_IP = /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/;
 
 export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: (id: string) => void }) {
-  const { state, offices, apply, by } = useDemo();
+  const { state, offices, addDevice, live } = useDemo();
+  const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(0);
   const [d, setD] = useState<Draft>(EMPTY);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +82,7 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   }
 
-  function save() {
+  async function save() {
     for (let i = 0; i < STEPS.length - 1; i++) {
       const p = problem(i);
       if (p) { setStep(i); return setError(p); }
@@ -91,15 +92,15 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
       : d.method === "local_push" ? { deviceIp: d.deviceIp.trim(), receiverPort: d.receiverPort, pushAuth: d.pushAuth }
       : d.method === "vendor_software" ? { software: d.software.trim(), host: d.host.trim() }
       : {};
-    const newId = `dev-${state.seq + 1}`; // the reducer's id for the next record
-    const err = apply({
-      type: "addDevice",
-      device: { name: d.name.trim(), manufacturer: d.manufacturer as Manufacturer, model: d.model.trim(), serial: d.serial, firmware: "", officeId: d.officeId, method: d.method as Method, agentId: needsAgent ? d.agentId : null, direction: d.direction, connection, createdBy: by },
-    });
-    if (err) return setError(err);
-    toast({ tone: "success", title: `${d.name.trim()} added (demonstration — not saved)`, body: "Status: Not connected. No device was contacted and nothing was saved to the database." });
+    setBusy(true);
+    const r = await addDevice({ name: d.name.trim(), manufacturer: d.manufacturer as Manufacturer, model: d.model.trim(), serial: d.serial.trim(), officeId: d.officeId, method: d.method as Method, agentId: needsAgent ? d.agentId : null, direction: d.direction, connection });
+    setBusy(false);
+    if (r.error) return setError(r.error);
+    toast(live
+      ? { tone: "success", title: `${d.name.trim()} added`, body: "Status: Not connected until its Sync Agent reports. No device was contacted." }
+      : { tone: "success", title: `${d.name.trim()} added (demonstration — not saved)`, body: "Status: Not connected. No device was contacted and nothing was saved to the database." });
     close();
-    onSaved(newId);
+    if (r.id) onSaved(r.id);
   }
 
   function close() {
@@ -115,7 +116,11 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
     <Modal open={open} title="Add a biometric device" subtitle={`Step ${step + 1} of ${STEPS.length}: ${STEPS[step]}`} onClose={close} wide>
       <div className="stack">
         <div className="alert warning" role="note">
-          <p><strong>Demonstration only.</strong> This saves a sample device in this browser tab. No hardware connection is configured, nothing is contacted and nothing is stored in the database.</p>
+          {live ? (
+            <p><strong>Registers the device in the company records.</strong> Nothing is contacted from here: the device starts sending punches only when its Sync Agent is set up on the office network.</p>
+          ) : (
+            <p><strong>Demonstration only.</strong> This saves a sample device in this browser tab. No hardware connection is configured, nothing is contacted and nothing is stored in the database.</p>
+          )}
         </div>
         <ol className="bio-steps" aria-label="Steps">
           {STEPS.map((s, i) => (
@@ -213,7 +218,7 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
               onChange={(e) => set("agentId", e.target.value)}
               placeholder="Choose an agent"
               options={state.agents.map((a) => ({ value: a.id, label: `${a.name} — ${a.host}${a.status === "online" ? "" : " (offline)"}` }))}
-              helper="The agent must be on the same office network as the device. Installing agents is Phase B4."
+              helper={state.agents.length ? "The agent must be on the same office network as the device." : "No Sync Agent is registered for this company yet. Register one first (owner set-up), or choose File import."}
             />
           ) : (
             <p className="meta">File imports don’t use a Sync Agent.</p>
@@ -245,14 +250,14 @@ export function AddDeviceWizard({ open, onClose, onSaved }: { open: boolean; onC
             <dt>Connection</dt><dd>{d.method === "sdk_pull" ? `${d.deviceIp}:${d.port}` : d.method === "local_push" ? `${d.deviceIp} → agent port ${d.receiverPort} · ${PUSH_AUTH_LABEL[d.pushAuth]}` : d.method === "vendor_software" ? `${d.software} on ${d.host}` : "File import"}</dd>
             <dt>Sync Agent</dt><dd>{needsAgent ? state.agents.find((a) => a.id === d.agentId)?.name : "None"}</dd>
             <dt>Direction</dt><dd>{DIRECTION_LABEL[d.direction]}</dd>
-            <dt>Status after saving</dt><dd>Not connected — no hardware connection is configured in this demonstration</dd>
+            <dt>Status after saving</dt><dd>{live ? "Not connected — until its Sync Agent reports" : "Not connected — no hardware connection is configured in this demonstration"}</dd>
           </dl>
         ) : null}
 
         {error ? <div className="alert danger" role="alert"><p>{error}</p></div> : null}
         <div className="dialog-actions">
           {step > 0 ? <Button onClick={() => { setError(null); setStep(step - 1); }}>Back</Button> : <Button onClick={close}>Cancel</Button>}
-          {step < STEPS.length - 1 ? <Button variant="primary" onClick={next}>Next</Button> : <Button variant="primary" onClick={save}>Save sample device</Button>}
+          {step < STEPS.length - 1 ? <Button variant="primary" onClick={next}>Next</Button> : <Button variant="primary" onClick={save} loading={busy}>{live ? "Save device" : "Save sample device"}</Button>}
         </div>
       </div>
     </Modal>

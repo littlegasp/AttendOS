@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/States";
 import { Button, FormInput, FormSelect, FormTextarea, GlassCard, SectionCard, StatusBadge } from "@/components/ui";
 import { endMappingConflicts, isoToZoned, type Mapping, mappingConflicts, resolveMapping, zonedToIso } from "@/lib/biometric-mock";
 import { toast } from "@/lib/toast";
-import { DemoNote, fmtTime, useDemo } from "./shared";
+import { DemoNote, fmtTime, useDemo, useSaved } from "./shared";
 
 function scopeName(deviceId: string | null, devices: { id: string; name: string }[]) {
   return deviceId ? devices.find((d) => d.id === deviceId)?.name ?? "Device" : "All devices (company-wide)";
@@ -58,6 +58,8 @@ export function MappingTable({ rows, showScope = true }: { rows: Mapping[]; show
 
 function EndMappingDialog({ m, onClose }: { m: Mapping; onClose: () => void }) {
   const { state, people, apply, tz, now } = useDemo();
+  const saved = useSaved();
+  const [busy, setBusy] = useState(false);
   const [at, setAt] = useState(isoToZoned(new Date(now).toISOString(), tz));
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -67,11 +69,13 @@ function EndMappingDialog({ m, onClose }: { m: Mapping; onClose: () => void }) {
     <Modal open title={`End mapping of code ${m.code}`} subtitle={`${p?.full_name ?? "Former employee"} · ${scopeName(m.deviceId, state.devices)}`} onClose={onClose}>
       <form
         className="stack"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
-          const err = apply({ type: "endMapping", mappingId: m.id, at: zonedToIso(at, tz), reason });
+          setBusy(true);
+          const err = await apply({ type: "endMapping", mappingId: m.id, at: zonedToIso(at, tz), reason });
+          setBusy(false);
           if (err) return setError(err);
-          toast({ tone: "success", title: `Mapping of code ${m.code} ended (demonstration — not saved)`, body: "Punches before the end stay with the same person." });
+          toast({ tone: "success", ...saved(`Mapping of code ${m.code} ended`, "Punches before the end stay with the same person.", "Punches before the end stay with the same person.") });
           onClose();
         }}
       >
@@ -83,7 +87,7 @@ function EndMappingDialog({ m, onClose }: { m: Mapping; onClose: () => void }) {
         <DemoNote />
         <div className="dialog-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="danger" disabled={blocks.length > 0}>End mapping</Button>
+          <Button type="submit" variant="danger" disabled={blocks.length > 0} loading={busy}>End mapping</Button>
         </div>
       </form>
     </Modal>
@@ -93,6 +97,8 @@ function EndMappingDialog({ m, onClose }: { m: Mapping; onClose: () => void }) {
 /** Map a code. Device-specific by default; company-wide only for Admin, with an explicit confirmation. Conflicts are explained before saving. */
 export function MappingForm({ open, onClose, code: initialCode = "", deviceId: initialDevice, validFrom: initialFrom }: { open: boolean; onClose: () => void; code?: string; deviceId?: string; validFrom?: string }) {
   const { state, people, apply, tz, now, may } = useDemo();
+  const saved = useSaved();
+  const [busy, setBusy] = useState(false);
   const devices = state.devices.filter((d) => !d.disabled);
   const [code, setCode] = useState(initialCode);
   const [scope, setScope] = useState(initialDevice ?? devices[0]?.id ?? "");
@@ -113,11 +119,13 @@ export function MappingForm({ open, onClose, code: initialCode = "", deviceId: i
     <Modal open={open} title="Map a device code" subtitle="Codes belong to one device. Choose the exact person — AttendOS never matches by name." onClose={onClose} wide>
       <form
         className="stack"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
-          const err = apply({ type: "addMapping", code, deviceId, employeeId: emp, validFrom, confirmCompanyWide: confirmCw });
+          setBusy(true);
+          const err = await apply({ type: "addMapping", code, deviceId, employeeId: emp, validFrom, confirmCompanyWide: confirmCw });
+          setBusy(false);
           if (err) return setError(err);
-          toast({ tone: "success", title: `Code ${code.trim()} mapped (demonstration — not saved)`, body: "Waiting punches it covers were attributed at their original times in this tab only." });
+          toast({ tone: "success", ...saved(`Code ${code.trim()} mapped`, "Waiting punches it covers were attributed at their original times in this tab only.", "Waiting punches it covers are attributed at their original times.") });
           onClose();
         }}
       >
@@ -163,7 +171,7 @@ export function MappingForm({ open, onClose, code: initialCode = "", deviceId: i
         <DemoNote />
         <div className="dialog-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="primary" disabled={blocks.length > 0 || (companyWide && !confirmCw)}>Save mapping</Button>
+          <Button type="submit" variant="primary" disabled={blocks.length > 0 || (companyWide && !confirmCw)} loading={busy}>Save mapping</Button>
         </div>
       </form>
     </Modal>

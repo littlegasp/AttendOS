@@ -327,5 +327,15 @@ rules), otherwise it is correction_needed; re-presses inside a counted pair stay
 (16), proofs 9a/9b; report §11. **Pair-selection review (21 Nov 2026):** the punch that closes a delayed IN is
 looked for in raw time order across every state, so a flagged/held/duplicate/correction_needed punch in between is never
 jumped over (the IN goes to HR); punches HR dismissed or confirmed as duplicates are passed over. Test group RP (13),
-proof 9c; full database run 872 checks; report §12. Awaiting owner review.
+proof 9c; full database run 872 checks; report §12. **Owner decision 21 Nov 2026: this pair-selection policy is
+approved** (HR-resolved punches passed over; unresolved/ambiguous ones block; a correction_needed IN is never
+re-paired automatically) — design §13. B3.4 database work is complete locally; nothing hosted.
+
+**B4 — application UI (21 Nov 2026, local only):** source labels Web / Biometric / Imported / Correction in Today,
+History, Register, late/overtime reports and verification history; biometric records never shown as GPS-verified;
+day timeline (`day_events`); provisional check-out shown apart from final hours (engine unchanged); CSV Source column
+(last column, existing columns unchanged); Biometric Devices module on the company's real records with every change
+through the checked database functions (preview keeps the B2 demonstration). No new migration. Tests: browser B4 60/60,
+app checks 64, regression 29/29, database 872, HTTP 18 + 17. Local demo data: `supabase/demo/biometric_demo.sql`.
+Report: docs/biometric/BIOMETRIC_B4_UI_REPORT.md. Not deployed; needs the hosted migrations (separate approval) first.
 

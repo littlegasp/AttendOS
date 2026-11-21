@@ -1,4 +1,8 @@
 """
+SUPERSEDED for connected mode by B4 (e2e/biometric_b4.py): since B4 a connected app shows the company's real
+biometric records, so the demonstration banner and the in-tab demonstration data this script checks exist only in
+preview mode (no database). Kept for the record of the B2 sign-off.
+
 Phase B2 browser checks — Biometric Devices (demonstration data).
 Uses the same local demo stack as regression.py (PostgREST :3001 on the demo database) and its signed-in contexts.
 Usage: python3 e2e/biometric_b2.py http://127.0.0.1:4176 /tmp/b2-shots

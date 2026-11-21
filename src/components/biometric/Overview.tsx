@@ -3,11 +3,11 @@
 import { EmptyState } from "@/components/States";
 import { Button, GlassCard, MetricCard, SectionCard } from "@/components/ui";
 import { needsAttention } from "@/lib/biometric-mock";
-import { ago, fmtTime, useDemo } from "./shared";
+import { AgentBadge, ago, fmtTime, useDemo } from "./shared";
 import { SyncTable } from "./SyncActivity";
 
 export function Overview({ openDevice, goto }: { openDevice: (id: string) => void; goto: (tab: "devices" | "sync" | "review") => void }) {
-  const { state, now, tz, may } = useDemo();
+  const { state, now, tz, may, live: isLive } = useDemo();
   const live = state.devices.filter((d) => !d.disabled);
   const online = live.filter((d) => d.conn === "online").length;
   const offline = live.filter((d) => d.conn === "offline" || d.conn === "error").length;
@@ -22,7 +22,7 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
       <GlassCard>
         <EmptyState
           title="No biometric devices yet"
-          body={may("manageBiometricDevices") ? "Add the first device to see its status, sync activity and review items here. In this demonstration nothing is connected." : "An Admin adds biometric devices. Their status, sync activity and review items will appear here."}
+          body={may("manageBiometricDevices") ? `Add the first device to see its status, sync activity and review items here.${isLive ? "" : " In this demonstration nothing is connected."}` : "An Admin adds biometric devices. Their status, sync activity and review items will appear here."}
           action={may("manageBiometricDevices") ? <Button variant="primary" onClick={() => goto("devices")}>Go to devices</Button> : undefined}
         />
       </GlassCard>
@@ -32,7 +32,7 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
     <div className="stack">
       <div className="grid-kpi bio-kpis">
         <MetricCard label="Total devices" value={state.devices.length} note={`${state.devices.length - live.length} disabled`} />
-        <MetricCard label="Online" value={online} tone="success" note="Demonstration status" />
+        <MetricCard label="Online" value={online} tone="success" note={isLive ? "Reported in the last 15 minutes" : "Demonstration status"} />
         <MetricCard label="Offline or in error" value={offline} tone={offline ? "danger" : "neutral"} note={`${live.filter((d) => d.conn === "never").length} not yet connected`} />
         <MetricCard label="Need attention" value={attention.length} tone={attention.length ? "warning" : "neutral"} note="Errors, offline > 1 h, clock drift > 5 min, failed sync" />
         <MetricCard label="Last successful sync" value={<span className="bio-kpi-time">{ago(lastOk, now)}</span>} note={fmtTime(lastOk, tz)} tone="info" />
@@ -40,7 +40,7 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
       </div>
 
       {attention.length ? (
-        <SectionCard title="Devices needing attention" subtitle="Status shown is demonstration data.">
+        <SectionCard title="Devices needing attention" subtitle={isLive ? "From the latest reports of the Sync Agents." : "Status shown is demonstration data."}>
           <ul className="bio-attn">
             {attention.map((d) => (
               <li key={d.id}>
@@ -54,13 +54,13 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
 
       <SectionCard
         title="Recent synchronisation"
-        subtitle="Latest sync runs reported by Sync Agents (demonstration)."
+        subtitle={isLive ? "Latest sync runs reported by Sync Agents." : "Latest sync runs reported by Sync Agents (demonstration)."}
         actions={<button type="button" className="link-btn small" onClick={() => goto("sync")}>All sync activity</button>}
       >
         <SyncTable runs={recent} openDevice={openDevice} />
       </SectionCard>
 
-      <SectionCard title="Sync Agents" subtitle="Agents run on a company PC on the office network (Phase B4). Shown here as samples.">
+      <SectionCard title="Sync Agents" subtitle={isLive ? "Agents run on a company PC on the office network. Registered agents are listed here." : "Agents run on a company PC on the office network. Shown here as samples."}>
         <div className="table-wrap">
           <table className="table">
             <thead>
@@ -69,11 +69,11 @@ export function Overview({ openDevice, goto }: { openDevice: (id: string) => voi
             <tbody>
               {state.agents.map((a) => (
                 <tr key={a.id}>
-                  <th scope="row">{a.name}<span className="tiny muted block mono">key {a.keyPrefix}…</span></th>
+                  <th scope="row">{a.name}{a.keyPrefix ? <span className="tiny muted block mono">key {a.keyPrefix}…</span> : null}</th>
                   <td>{a.host}</td>
-                  <td><span className={`badge tone-${a.status === "online" ? "success" : "danger"}`}><span className="badge-dot" aria-hidden="true" />{a.status === "online" ? "Online · demo" : "Offline · demo"}</span></td>
+                  <td><AgentBadge status={a.status} /></td>
                   <td>{ago(a.lastHeartbeat, now)}</td>
-                  <td>{a.queueDepth ? `${a.queueDepth} waiting` : "Empty"}</td>
+                  <td>{a.queueDepth === null ? "Not reported" : a.queueDepth ? `${a.queueDepth} waiting` : "Empty"}</td>
                   <td>{state.devices.filter((d) => d.agentId === a.id).map((d) => d.name).join(", ") || "—"}</td>
                 </tr>
               ))}

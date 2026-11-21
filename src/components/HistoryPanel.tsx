@@ -14,9 +14,12 @@ import {
 } from "@/lib/attendance";
 import { addDays, todayIn } from "@/lib/roster";
 import { friendlyError, supabase } from "@/lib/supabase";
+import { daySourceKey, loadDaySources } from "@/lib/sources";
 import { toast } from "@/lib/toast";
 import { must, useLoad } from "@/lib/use-load";
+import { DayTimeline } from "./DayTimeline";
 import { Modal } from "./Modal";
+import { ProvisionalOut, SourceBadges } from "./SourceBadges";
 import { EmptyState, ErrorState, LoadingState } from "./States";
 import { Button, FormInput, FormSelect, FormTextarea, GlassCard, SectionCard, StatusBadge } from "./ui";
 
@@ -29,17 +32,21 @@ const monthLabel = (start: string) => new Date(`${start}T12:00:00Z`).toLocaleDat
  * `employeeId` is the signed-in person on My Attendance; the database also lets their
  * manager and HR read it.
  */
-export function HistoryPanel({ employeeId, tz, days, canRequest = true, onRequested }: { employeeId: string; tz: string; days?: number; canRequest?: boolean; onRequested?: () => void }) {
+export function HistoryPanel({ employeeId, tz, days, canRequest = true, onRequested, name }: { employeeId: string; tz: string; days?: number; canRequest?: boolean; onRequested?: () => void; name?: string }) {
   const today = todayIn(tz);
   const [month, setMonth] = useState(monthStart(today));
   const from = days ? addDays(today, -(days - 1)) : month;
   const to = days ? today : monthEnd(month) > today ? today : monthEnd(month);
   const [fix, setFix] = useState<DayRow | null>(null);
+  const [timeline, setTimeline] = useState<string | null>(null);
 
   const { data, error, loading, reload } = useLoad(
     async () => (from > today ? [] : must(await supabase().rpc("attendance_history", { emp: employeeId, d_from: from, d_to: to })) as DayRow[]),
     `${employeeId}:${from}:${to}`,
   );
+  // Source of each day's counted punches and any provisional check-out (migration 0012). Unknown (null) on a database without it.
+  const sources = useLoad(async () => (from > today ? null : loadDaySources(supabase(), from, to, null, employeeId)), `src:${employeeId}:${from}:${to}`);
+  const src = (d: string) => sources.data?.get(daySourceKey(employeeId, d));
 
   if (error) return <GlassCard><ErrorState title="Couldn't load attendance history" body={error} onRetry={reload} /></GlassCard>;
 
@@ -70,17 +77,19 @@ export function HistoryPanel({ employeeId, tz, days, canRequest = true, onReques
             <thead>
               <tr>
                 <th scope="col">Date</th><th scope="col">Shift</th><th scope="col">In</th><th scope="col">Out</th><th scope="col">Break</th>
-                <th scope="col">Worked</th><th scope="col">Late</th><th scope="col">Early</th><th scope="col">Overtime</th><th scope="col">Status</th>
-                {canRequest ? <th scope="col"><span className="sr-only">Actions</span></th> : null}
+                <th scope="col">Worked</th><th scope="col">Late</th><th scope="col">Early</th><th scope="col">Overtime</th><th scope="col">Status</th><th scope="col">Source</th>
+                <th scope="col"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.work_date}>
-                  <th scope="row">{shortDate(r.work_date)}</th>
+                  <th scope="row">
+                    <button type="button" className="link-btn" aria-label={`Timeline for ${shortDate(r.work_date)}`} title="Open the day timeline" onClick={() => setTimeline(r.work_date)}>{shortDate(r.work_date)}</button>
+                  </th>
                   <td className="muted" title={r.shift_start ? `${clock(r.shift_start, tz)}–${clock(r.shift_end!, tz)}` : undefined}>{r.shift_name ?? (r.work_mode === "off" ? "—" : "No shift")}</td>
                   <td>{r.first_in ? clock(r.first_in, tz) : "—"}</td>
-                  <td>{r.last_out ? clock(r.last_out, tz) : r.open ? <span className="muted">open</span> : "—"}</td>
+                  <td>{r.last_out ? clock(r.last_out, tz) : src(r.work_date)?.pending ? <ProvisionalOut /> : r.open ? <span className="muted">open</span> : "—"}</td>
                   <td>{r.break_min ? hm(r.break_min) : "—"}</td>
                   <td>{r.worked_min ? hm(r.worked_min) : "—"}</td>
                   <td className={r.late_min ? "warn" : ""}>{r.late_min ? hm(r.late_min) : "—"}</td>
@@ -90,7 +99,8 @@ export function HistoryPanel({ employeeId, tz, days, canRequest = true, onReques
                     <StatusBadge status={STATUS_BADGE[r.status]} label={STATUS_LABEL[r.status]} />
                     {r.pending_correction ? <span className="tiny muted block">Correction pending</span> : null}
                   </td>
-                  {canRequest ? <td>{canFix(r) ? <Button size="sm" variant="ghost" aria-label={`Request a correction for ${shortDate(r.work_date)}`} onClick={() => setFix(r)}>Correct…</Button> : null}</td> : null}
+                  <td><SourceBadges day={src(r.work_date)} /></td>
+                  <td>{canFix(r) ? <Button size="sm" variant="ghost" aria-label={`Request a correction for ${shortDate(r.work_date)}`} onClick={() => setFix(r)}>Correct…</Button> : null}</td>
                 </tr>
               ))}
             </tbody>
@@ -105,7 +115,7 @@ export function HistoryPanel({ employeeId, tz, days, canRequest = true, onReques
               </div>
               <div className="hc-times">
                 <span><span className="meta block">In</span>{r.first_in ? clock(r.first_in, tz) : "—"}</span>
-                <span><span className="meta block">Out</span>{r.last_out ? clock(r.last_out, tz) : r.open ? "open" : "—"}</span>
+                <span><span className="meta block">Out</span>{r.last_out ? clock(r.last_out, tz) : src(r.work_date)?.pending ? "Provisional" : r.open ? "open" : "—"}</span>
                 <span><span className="meta block">Worked</span>{r.worked_min ? hm(r.worked_min) : "—"}</span>
               </div>
               {r.late_min || r.early_min || r.overtime_min || r.pending_correction ? (
@@ -115,7 +125,13 @@ export function HistoryPanel({ employeeId, tz, days, canRequest = true, onReques
                     .join(" · ")}
                 </p>
               ) : null}
-              {canFix(r) ? <Button size="sm" variant="ghost" onClick={() => setFix(r)}>Request correction</Button> : null}
+              {src(r.work_date)?.sources.length || src(r.work_date)?.pending ? (
+                <p className="meta">Source: <SourceBadges day={src(r.work_date)} />{src(r.work_date)?.pending ? " · provisional check-out, not in hours until the day closes" : ""}</p>
+              ) : null}
+              <div className="row-actions">
+                <Button size="sm" variant="ghost" onClick={() => setTimeline(r.work_date)}>Timeline</Button>
+                {canFix(r) ? <Button size="sm" variant="ghost" onClick={() => setFix(r)}>Request correction</Button> : null}
+              </div>
             </li>
           ))}
         </ul>
@@ -138,6 +154,7 @@ export function HistoryPanel({ employeeId, tz, days, canRequest = true, onReques
       }
     >
       {body}
+      {timeline ? <DayTimeline employeeId={employeeId} name={name} day={timeline} tz={tz} onClose={() => setTimeline(null)} /> : null}
       {fix ? (
         <CorrectionModal
           row={fix}

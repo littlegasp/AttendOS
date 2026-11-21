@@ -1,6 +1,7 @@
 # Biometric Phase B2 — Device management UI (demonstration data)
 
-Status: **implemented and locally tested with mock data.** No migration, database function, gateway, Sync Agent,
+Status: **implemented and locally tested with mock data.** *Since B4 (21 Nov 2026) a connected app shows the company's
+real records in these screens (BIOMETRIC_B4_UI_REPORT.md); the demonstration below applies to preview mode only.* No migration, database function, gateway, Sync Agent,
 adapter, SDK or device connection. Nothing deployed. Branch `feature/biometric-b1`.
 
 ## Where it lives

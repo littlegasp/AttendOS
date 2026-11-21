@@ -181,7 +181,7 @@ export function EmployeeProfile({ id, lookups, onBack, onChanged }: { id: string
         </div>
       </div>
 
-      <HistoryPanel employeeId={e.id} tz={company?.timezone ?? "Asia/Kolkata"} days={14} canRequest={false} />
+      <HistoryPanel employeeId={e.id} name={e.full_name} tz={company?.timezone ?? "Asia/Kolkata"} days={14} canRequest={false} />
       <PersonLeave employeeId={e.id} />
 
       {manage ? (

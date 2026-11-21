@@ -1,4 +1,8 @@
 """
+SUPERSEDED for connected mode by B4 (e2e/biometric_b4.py): since B4 a connected app shows the company's real
+biometric records, so the demonstration banner and the in-tab demonstration data this script checks exist only in
+preview mode (no database). Kept for the record of the B2 sign-off.
+
 Phase B2 sign-off checks — Biometric Devices (demonstration data), run against the local demo stack.
   1. Role matrix in the interface, for Admin (a1), HR (b2), Manager (c3) and Employee (d1) separately.
   2. Demonstration mode: every network request during a full Admin session that performs every action is recorded;

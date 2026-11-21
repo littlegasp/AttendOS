@@ -7,20 +7,21 @@ import { Button, GlassCard, SectionCard } from "@/components/ui";
 import { connOf, DIRECTION_LABEL, type DirectionMode, MANUFACTURER_LABEL, METHOD_LABEL, needsAttention, PUSH_AUTH_LABEL, type PushAuth } from "@/lib/biometric-mock";
 import { toast } from "@/lib/toast";
 import { MappingTable } from "./Mapping";
-import { ago, ConnBadge, drift, fmtTime, NotYet, useDemo } from "./shared";
+import { AgentBadge, ago, ConnBadge, drift, fmtTime, NotYet, useDemo, useSaved } from "./shared";
 import { SyncTable } from "./SyncActivity";
 
 const CONN_FIELD: Record<string, string> = { deviceIp: "Device IP (LAN)", port: "Device port", receiverPort: "Agent receiver port", pushAuth: "Push authentication", software: "Vendor software", host: "Software host" };
 
 export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
-  const { state, offices, apply, tz, now, may } = useDemo();
+  const { state, offices, apply, tz, now, may, live } = useDemo();
+  const saved = useSaved();
   const manage = may("manageBiometricDevices");
   const [confirm, setConfirm] = useState(false);
   const d = state.devices.find((x) => x.id === id);
   if (!d) {
     return (
       <GlassCard>
-        <EmptyState title="Device not found" body="It may have been added in an earlier session of this demonstration (data resets on reload)." action={<Button onClick={back}>Back to devices</Button>} />
+        <EmptyState title="Device not found" body={live ? "It may have been removed, or it belongs to another company." : "It may have been added in an earlier session of this demonstration (data resets on reload)."} action={<Button onClick={back}>Back to devices</Button>} />
       </GlassCard>
     );
   }
@@ -46,13 +47,13 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
           </div>
         </div>
         <div className="ph-actions">
-          {may("retryBiometricSync") ? <><NotYet label="Test connection" phase="B4" /><NotYet label="Sync now" phase="B4" /></> : null}
+          {may("retryBiometricSync") ? <><NotYet label="Test connection" phase="Agent" /><NotYet label="Sync now" phase="Agent" /></> : null}
           {manage ? (
-            <Button variant={d.disabled ? "secondary" : "danger"} size="sm" onClick={() => {
+            <Button variant={d.disabled ? "secondary" : "danger"} size="sm" onClick={async () => {
                 if (!d.disabled) return setConfirm(true);
-                const err = apply({ type: "setDisabled", deviceId: d.id, disabled: false });
-                if (err) return toast({ tone: "danger", title: "Not allowed", body: err });
-                toast({ tone: "success", title: `${d.name} enabled (demonstration — not saved)`, body: "No device was contacted." });
+                const err = await apply({ type: "setDisabled", deviceId: d.id, disabled: false });
+                if (err) return toast({ tone: "danger", title: "Not saved", body: err });
+                toast({ tone: "success", ...saved(`${d.name} enabled`, "No device was contacted.", "Its punches are accepted again. No device was contacted.") });
               }}>
               {d.disabled ? "Enable device" : "Disable device"}
             </Button>
@@ -71,7 +72,7 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
             <dt>Registered</dt><dd>{fmtTime(d.createdAt, tz)} by {d.createdBy}</dd>
           </dl>
         </SectionCard>
-        <SectionCard title="Connection" subtitle="Demonstration values — no device is contacted.">
+        <SectionCard title="Connection" subtitle={live ? "As reported by the Sync Agent — this screen never contacts the device." : "Demonstration values — no device is contacted."}>
           <dl className="rules-view">
             <dt>Status</dt><dd><ConnBadge conn={connOf(d)} /></dd>
             <dt>Method</dt><dd>{METHOD_LABEL[d.method]}</dd>
@@ -92,9 +93,9 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
             <dl className="rules-view">
               <dt>Agent</dt><dd>{agent.name}</dd>
               <dt>Computer</dt><dd>{agent.host}</dd>
-              <dt>Status</dt><dd><span className={`badge tone-${agent.status === "online" ? "success" : "danger"}`}><span className="badge-dot" aria-hidden="true" />{agent.status === "online" ? "Online · demo" : "Offline · demo"}</span></dd>
+              <dt>Status</dt><dd><AgentBadge status={agent.status} /></dd>
               <dt>Last heartbeat</dt><dd>{ago(agent.lastHeartbeat, now)}</dd>
-              <dt>Queue</dt><dd>{agent.queueDepth ? `${agent.queueDepth} punches waiting to upload` : "Empty"}</dd>
+              <dt>Queue</dt><dd>{agent.queueDepth === null ? "Not reported" : agent.queueDepth ? `${agent.queueDepth} punches waiting to upload` : "Empty"}</dd>
               <dt>Version</dt><dd className="mono">{agent.version}</dd>
             </dl>
           ) : (
@@ -109,10 +110,10 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
               id="bio-dir"
               className="input"
               value={d.direction}
-              onChange={(e) => {
-                const err = apply({ type: "setDirection", deviceId: d.id, direction: e.target.value as DirectionMode });
-                if (err) return toast({ tone: "danger", title: "Not allowed", body: err });
-                toast({ tone: "success", title: "Direction mode changed (demonstration — not saved)", body: "No device or database setting changed." });
+              onChange={async (e) => {
+                const err = await apply({ type: "setDirection", deviceId: d.id, direction: e.target.value as DirectionMode });
+                if (err) return toast({ tone: "danger", title: "Not saved", body: err });
+                toast({ tone: "success", ...saved("Direction mode changed", "No device or database setting changed.", "Applies to punches processed from now on. No device was contacted.") });
               }}
             >
               {(Object.keys(DIRECTION_LABEL) as DirectionMode[]).map((k) => <option key={k} value={k}>{DIRECTION_LABEL[k]}</option>)}
@@ -149,15 +150,15 @@ export function DeviceDetail({ id, back }: { id: string; back: () => void }) {
       <ConfirmDialog
         open={confirm}
         title={`Disable ${d.name}?`}
-        consequence="A disabled device's punches are no longer accepted. Its history, codes and sync records stay. In this demonstration only the label changes."
+        consequence={`A disabled device's punches are no longer accepted. Its history, codes and sync records stay.${live ? "" : " In this demonstration only the label changes."}`}
         confirmLabel="Disable device"
         danger
         onCancel={() => setConfirm(false)}
-        onConfirm={() => {
-          const err = apply({ type: "setDisabled", deviceId: d.id, disabled: true });
+        onConfirm={async () => {
+          const err = await apply({ type: "setDisabled", deviceId: d.id, disabled: true });
           setConfirm(false);
-          if (err) return toast({ tone: "danger", title: "Not allowed", body: err });
-          toast({ tone: "success", title: `${d.name} disabled (demonstration — not saved)`, body: "No device was contacted." });
+          if (err) return toast({ tone: "danger", title: "Not saved", body: err });
+          toast({ tone: "success", ...saved(`${d.name} disabled`, "No device was contacted.", "Its punches are no longer accepted. No device was contacted.") });
         }}
       />
     </div>

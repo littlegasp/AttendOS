@@ -16,7 +16,7 @@ export interface AttendanceEvent {
   distance_m: number | null;
   accuracy_m?: number | null;
   verified: boolean;
-  source?: "web" | "correction";
+  source?: "web" | "correction" | "biometric" | "import";
 }
 
 export interface ShiftInfo {

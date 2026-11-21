@@ -7,7 +7,7 @@ import { type Conn, connOf, DIRECTION_LABEL, MANUFACTURER_LABEL, type Manufactur
 import { ago, ConnBadge, useDemo } from "./shared";
 
 export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => void; onAdd: () => void }) {
-  const { state, offices, now, may } = useDemo();
+  const { state, offices, now, may, live } = useDemo();
   const canAdd = may("manageBiometricDevices");
   const [q, setQ] = useState("");
   const [maker, setMaker] = useState("");
@@ -49,7 +49,7 @@ export function DeviceList({ openDevice, onAdd }: { openDevice: (id: string) => 
       {rows.length === 0 ? (
         <EmptyState
           title={filtered ? "No devices match" : "No biometric devices yet"}
-          body={filtered ? "Try a different search or clear the filters." : canAdd ? "Add the first device to start mapping employee codes. In this demonstration nothing is connected." : "An Admin adds biometric devices. Once one is added you can map employee codes here."}
+          body={filtered ? "Try a different search or clear the filters." : canAdd ? `Add the first device to start mapping employee codes.${live ? "" : " In this demonstration nothing is connected."}` : "An Admin adds biometric devices. Once one is added you can map employee codes here."}
           action={filtered || !canAdd ? undefined : <Button variant="primary" onClick={onAdd}>Add device</Button>}
         />
       ) : (

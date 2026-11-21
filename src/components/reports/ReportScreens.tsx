@@ -7,6 +7,8 @@ import { Button, FormInput, GlassCard, MetricCard, SectionCard, StatusBadge } fr
 import { NavIcon } from "@/components/Icons";
 import { clock, hm } from "@/lib/attendance";
 import { downloadCsv, toCsv } from "@/lib/csv";
+import { csvSource, daySourceKey, type DaySourceMap, loadDaySources } from "@/lib/sources";
+import { SourceBadges } from "@/components/SourceBadges";
 import { daysBetween, formatDay, MAX_RANGE_DAYS, presetRange, shortFormat, type RangePreset } from "@/lib/dates";
 import { todayIn } from "@/lib/employees";
 import { LEAVE_STATUS_BADGE, LEAVE_STATUS_LABEL, type LeaveRow } from "@/lib/leave";
@@ -119,6 +121,11 @@ export function Reports() {
     if (rangeError(f) || (tab !== "late" && tab !== "overtime")) return null;
     return must(await supabase().rpc("attendance_register", { ...args(f), p_status: tab === "late" ? "late" : null, p_limit: 5000, p_offset: 0 })) as RegisterRow[];
   }, `detail:${tab}:${f.from}:${f.to}:${f.department}:${f.employee}:${f.shift}`);
+  // Source column of the late / overtime export (B4); null when the database does not have migration 0012.
+  const detailSources = useLoad(async () => {
+    if (rangeError(f) || (tab !== "late" && tab !== "overtime")) return null;
+    return loadDaySources(supabase(), f.from, f.to, f.department || null, f.employee || null);
+  }, `src:${tab}:${f.from}:${f.to}:${f.department}:${f.employee}`);
   const leave = useLoad(async () => {
     if (rangeError(f) || tab !== "leave") return null;
     const rows = must(await supabase().rpc("leave_list", { p_from: f.from, p_to: f.to, p_status: null })) as LeaveRow[];
@@ -165,6 +172,7 @@ export function Reports() {
         { label: "Date", value: (r) => formatDay(r.work_date, fmt) }, { label: "Shift", value: (r) => r.shift_name },
         { label: "Check-in", value: (r) => (r.first_in ? clock(r.first_in, tz) : "") }, { label: "Check-out", value: (r) => (r.last_out ? clock(r.last_out, tz) : "") },
         { label: tab === "overtime" ? "Overtime (min)" : "Late (min)", value: (r) => (tab === "overtime" ? r.overtime_min : r.late_min) },
+        { label: "Source", value: (r) => csvSource(detailSources.data, r.employee_id, r.work_date) },
       ]));
     }
   }
@@ -212,7 +220,7 @@ export function Reports() {
           tab === "daily" ? <DailyTable rows={data.data.trend} fmt={fmt} /> :
           tab === "leave" ? (leave.error ? <ErrorState body={leave.error} onRetry={leave.reload} /> : !leave.data ? <LoadingState kind="table" /> : <LeaveTable rows={leave.data} fmt={fmt} />) :
           detail.error ? <GlassCard><ErrorState body={detail.error} onRetry={detail.reload} /></GlassCard> : !detail.data ? <LoadingState kind="table" /> :
-          <DetailTable rows={detail.data.filter((r) => (tab === "overtime" ? r.overtime_min > 0 : r.late_min > 0))} kind={tab === "overtime" ? "overtime" : "late"} tz={tz} fmt={fmt} />}
+          <DetailTable rows={detail.data.filter((r) => (tab === "overtime" ? r.overtime_min > 0 : r.late_min > 0))} kind={tab === "overtime" ? "overtime" : "late"} tz={tz} fmt={fmt} src={detailSources.data} />}
       </div>
     </>
   );
@@ -266,14 +274,14 @@ function DailyTable({ rows, fmt }: { rows: TrendRow[]; fmt: string }) {
   );
 }
 
-function DetailTable({ rows, kind, tz, fmt }: { rows: RegisterRow[]; kind: "late" | "overtime"; tz: string; fmt: string }) {
+function DetailTable({ rows, kind, tz, fmt, src }: { rows: RegisterRow[]; kind: "late" | "overtime"; tz: string; fmt: string; src: DaySourceMap | null | undefined }) {
   if (!rows.length) return <GlassCard><EmptyState title={kind === "late" ? "No late arrivals" : "No overtime"} body="Nothing in this period for these filters." /></GlassCard>;
   return (
     <SectionCard title={kind === "late" ? "Late arrivals" : "Overtime"} subtitle={`${rows.length} days · ${hm(rows.reduce((a, r) => a + (kind === "late" ? r.late_min : r.overtime_min), 0))} in total`}>
       <div className="table-wrap">
         <table className="table">
-          <thead><tr><th scope="col">Employee</th><th scope="col">Date</th><th scope="col">Shift</th><th scope="col">Check-in</th><th scope="col">Check-out</th><th scope="col">{kind === "late" ? "Late by" : "Overtime"}</th></tr></thead>
-          <tbody>{rows.map((r) => <tr key={`${r.employee_id}:${r.work_date}`}><th scope="row">{r.full_name}<span className="tiny muted block">{r.department ?? ""}</span></th><td>{formatDay(r.work_date, fmt)}</td><td>{r.shift_name ?? "—"}</td><td>{r.first_in ? clock(r.first_in, tz) : "—"}</td><td>{r.last_out ? clock(r.last_out, tz) : "—"}</td><td><strong>{hm(kind === "late" ? r.late_min : r.overtime_min)}</strong></td></tr>)}</tbody>
+          <thead><tr><th scope="col">Employee</th><th scope="col">Date</th><th scope="col">Shift</th><th scope="col">Check-in</th><th scope="col">Check-out</th><th scope="col">{kind === "late" ? "Late by" : "Overtime"}</th><th scope="col">Source</th></tr></thead>
+          <tbody>{rows.map((r) => <tr key={`${r.employee_id}:${r.work_date}`}><th scope="row">{r.full_name}<span className="tiny muted block">{r.department ?? ""}</span></th><td>{formatDay(r.work_date, fmt)}</td><td>{r.shift_name ?? "—"}</td><td>{r.first_in ? clock(r.first_in, tz) : "—"}</td><td>{r.last_out ? clock(r.last_out, tz) : "—"}</td><td><strong>{hm(kind === "late" ? r.late_min : r.overtime_min)}</strong></td><td><SourceBadges day={src?.get(daySourceKey(r.employee_id, r.work_date))} /></td></tr>)}</tbody>
         </table>
       </div>
     </SectionCard>

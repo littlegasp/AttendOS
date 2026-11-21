@@ -158,7 +158,8 @@ test("mapping an unmatched code resolves only the punches it covers, at their or
 
 test("review decisions: only valid ones, reason where required, raw never modified, decided once", () => {
   const s = fresh();
-  for (const [kind, ds] of Object.entries(DECISIONS_FOR)) assert.ok(ds.length > 0, kind);
+  // Every kind has decisions, except a held punch (B4 live state): it waits and is looked at again automatically.
+  for (const [kind, ds] of Object.entries(DECISIONS_FOR)) assert.ok(kind === "held" ? ds.length === 0 : ds.length > 0, kind);
   for (const d of ["accept_time", "dismiss", "not_duplicate"] as const) assert.ok(DECISION[d].reasonRequired, d);
   const r = s.reviews.find((x) => x.status === "open" && x.kind === "timestamp")!;
   const rawBefore = structuredClone(r.raw);
@@ -197,7 +198,7 @@ test("reset and empty module", () => {
   assert.equal(s.devices.length + s.mappings.length + s.reviews.length, 0);
 });
 
-test("the biometric module makes no database writes and no device connections", () => {
+test("the biometric module makes no direct table writes and no device connections", () => {
   const dir = join(__dirname, "../src/components/biometric");
   const page = readFileSync(join(__dirname, "../src/app/(app)/biometric/page.tsx"), "utf8");
   const files = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).concat(page, readFileSync(join(__dirname, "../src/lib/biometric-mock.ts"), "utf8"));
@@ -206,8 +207,9 @@ test("the biometric module makes no database writes and no device connections", 
     assert.equal(/fetch\(|WebSocket|XMLHttpRequest|EventSource/.test(src), false, "no network calls");
     assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(src), false, "no hard-coded colours");
   }
-  const rpcs = [...page.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(rpcs, ["people_directory"], "only the read-only people list");
+  // The page itself reads only the people list (demonstration and live loaders); live changes go through lib/biometric-live.ts (tests/b4.test.ts).
+  const rpcs = new Set([...page.matchAll(/\.rpc\("([a-z_]+)"/g)].map((m) => m[1]));
+  assert.deepEqual([...rpcs], ["people_directory"], "only the read-only people list");
 });
 
 test("sign-off: processed punches are never silently reassigned by a mapping change", () => {

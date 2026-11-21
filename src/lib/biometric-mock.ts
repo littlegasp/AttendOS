@@ -27,9 +27,10 @@ export interface Agent {
   name: string;
   host: string;
   version: string;
-  status: "online" | "offline";
+  status: "online" | "offline" | "revoked";
   lastHeartbeat: string | null;
-  queueDepth: number;
+  /** Punches waiting on the agent PC; null when the agent does not report it (live data, B4). */
+  queueDepth: number | null;
   keyPrefix: string;
 }
 
@@ -75,7 +76,7 @@ export interface SyncRun {
   agentId: string | null;
   started: string;
   completed: string | null;
-  status: "ok" | "partial" | "failed" | "retrying";
+  status: "ok" | "partial" | "failed" | "retrying" | "running" | "replay";
   received: number;
   stored: number;
   confirmedDup: number;
@@ -86,7 +87,8 @@ export interface SyncRun {
   retry: { attempt: number; nextAt: string } | null;
 }
 
-export type ReviewKind = "unmatched" | "ambiguous" | "possible_duplicate" | "after_correction" | "timestamp";
+/** B2 demonstration kinds, plus the states the database really uses (B4 live data: flagged, extra, correction_needed, held). */
+export type ReviewKind = "unmatched" | "ambiguous" | "possible_duplicate" | "after_correction" | "timestamp" | "flagged" | "extra" | "correction_needed" | "held";
 export type Decision = "accept_time" | "dismiss" | "confirm_duplicate" | "not_duplicate" | "keep_extra" | "keep_correction";
 
 export interface AuditEntry { at: string; by: string; action: string; note?: string }
@@ -109,6 +111,10 @@ export interface ReviewItem {
   reason: string;
   status: "open" | "resolved" | "dismissed";
   history: AuditEntry[];
+  /** Live data (B4): the stored punch id, its version for the optimistic check, and the person it is attributed to. */
+  rawId?: number;
+  version?: number;
+  employeeId?: string | null;
 }
 
 export interface DeviceError { id: string; deviceId: string; at: string; kind: string; detail: string; resolved: boolean }
@@ -140,6 +146,10 @@ export const REVIEW_LABEL: Record<ReviewKind, string> = {
   possible_duplicate: "Possible duplicate",
   after_correction: "Punch after an HR correction",
   timestamp: "Invalid or suspicious time",
+  flagged: "Needs review",
+  extra: "Extra punch",
+  correction_needed: "Needs an attendance correction",
+  held: "Waiting (on hold)",
 };
 export const PUSH_AUTH_LABEL: Record<PushAuth, string> = {
   authenticated: "Device authenticates each request (secret / signature / TLS)",
@@ -162,6 +172,10 @@ export const DECISIONS_FOR: Record<ReviewKind, Decision[]> = {
   possible_duplicate: ["confirm_duplicate", "not_duplicate"],
   after_correction: ["keep_correction", "dismiss"],
   timestamp: ["dismiss", "accept_time"],
+  flagged: ["accept_time", "dismiss"],
+  extra: ["keep_extra", "dismiss"],
+  correction_needed: ["dismiss"],
+  held: [],
 };
 
 /** Methods documented for each manufacturer in BIOMETRIC_HARDWARE_COMPATIBILITY.md — none hardware-verified. */

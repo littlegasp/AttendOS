@@ -371,7 +371,7 @@ before the run is the RP1 case.
 
 Write budgets: B1–B10, Q4 and the R budget checks pass unchanged; the wider search reads rows but writes nothing.
 
-### 12.5 Decision taken, open to the owner
+### 12.5 Decision taken — approved by the owner on 21 Nov 2026
 
 Passing over **HR-resolved** punches (dismissed, rejected, HR-decided extra/reconciled) is a choice: HR has already
 said they are not attendance, so treating them as blocking would send clean days to HR for no new reason (RP7). If the

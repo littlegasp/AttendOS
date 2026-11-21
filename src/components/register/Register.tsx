@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { DayTimeline } from "@/components/DayTimeline";
+import { ProvisionalOut, SourceBadges } from "@/components/SourceBadges";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Tabs } from "@/components/Tabs";
 import { Button, FormInput, GlassCard, SectionCard, StatusBadge } from "@/components/ui";
@@ -21,6 +23,7 @@ import {
   type RegisterRow,
 } from "@/lib/register";
 import { useSession } from "@/lib/session";
+import { csvSource, daySourceKey, type DaySourceMap, loadDaySources } from "@/lib/sources";
 import { supabase } from "@/lib/supabase";
 import { must, useLoad } from "@/lib/use-load";
 
@@ -32,8 +35,8 @@ const PAGE = 50;
 interface Lookup { id: string; name: string; active: boolean }
 interface Person { id: string; full_name: string; emp_code: string | null; active: boolean }
 
-/** The same columns on screen and in the CSV, so an export never shows more than the screen. */
-function csvCols(tz: string, fmt: string) {
+/** The same columns on screen and in the CSV, so an export never shows more than the screen. Source (B4) is added last so existing columns keep their place. */
+function csvCols(tz: string, fmt: string, src: DaySourceMap | null | undefined) {
   return [
     { label: "Employee", value: (r: RegisterRow) => r.full_name },
     { label: "Employee ID", value: (r: RegisterRow) => r.emp_code },
@@ -50,6 +53,7 @@ function csvCols(tz: string, fmt: string) {
     { label: "Overtime (min)", value: (r: RegisterRow) => r.overtime_min || "" },
     { label: "Status", value: (r: RegisterRow) => statusText(r.status) + (r.half_day ? " (half day)" : "") },
     { label: "Note", value: (r: RegisterRow) => r.note },
+    { label: "Source", value: (r: RegisterRow) => csvSource(src, r.employee_id, r.work_date) },
   ];
 }
 
@@ -109,6 +113,12 @@ export function Register() {
     })) as RegisterRow[];
   }, `${view}:${range.from}:${range.to}:${f.department}:${f.employee}:${f.shift}:${f.status}`);
 
+  const sources = useLoad(async () => {
+    if (personNeeded || range.to < range.from) return null;
+    return loadDaySources(supabase(), range.from, range.to, f.department || null, f.employee || null);
+  }, `src:${view}:${range.from}:${range.to}:${f.department}:${f.employee}`);
+  const [timeline, setTimeline] = useState<RegisterRow | null>(null);
+
   const rows = useMemo(() => (data ? sortRows(data as unknown as Record<string, unknown>[], sort.key as string, sort.dir) as unknown as RegisterRow[] : []), [data, sort]);
   useEffect(() => setPage(0), [view, day, month, f]);
   const set = (k: keyof RegisterFilters) => (e: React.ChangeEvent<HTMLSelectElement>) => setF((x) => ({ ...x, [k]: e.target.value }));
@@ -117,7 +127,7 @@ export function Register() {
 
   function exportCsv() {
     const label = view === "daily" ? day : `${m.from.slice(0, 7)}`;
-    downloadCsv(`attendance-${view}-${label}`, toCsv(rows, csvCols(tz, fmt)));
+    downloadCsv(`attendance-${view}-${label}`, toCsv(rows, csvCols(tz, fmt, sources.data)));
   }
 
   const L = lookups.data;
@@ -171,7 +181,7 @@ export function Register() {
         ) : (
           <SectionCard title={view === "daily" ? formatDay(day, fmt) : `${rows[0]!.full_name} · ${m.label}`} subtitle={`${rows.length} ${rows.length === 1 ? "record" : "records"}${truncated ? ` (first ${LIMIT} — narrow the filters)` : ""}`}
             actions={view === "person" ? <Link className="btn ghost sm" href={`/employees?id=${f.employee}`}>Open profile</Link> : undefined}>
-            <DayTable rows={rows.slice(page * PAGE, page * PAGE + PAGE)} tz={tz} fmt={fmt} sort={sort} onSort={(key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : 1 }))} showDate={view !== "daily"} />
+            <DayTable rows={rows.slice(page * PAGE, page * PAGE + PAGE)} tz={tz} fmt={fmt} sort={sort} onSort={(key) => setSort((s) => ({ key, dir: s.key === key ? (s.dir === 1 ? -1 : 1) : 1 }))} showDate={view !== "daily"} src={sources.data} onTimeline={setTimeline} />
             {rows.length > PAGE ? (
               <div className="pager">
                 <Button size="sm" onClick={() => setPage((p) => p - 1)} disabled={page === 0}>‹ Previous</Button>
@@ -182,6 +192,7 @@ export function Register() {
           </SectionCard>
         )}
       </div>
+      {timeline ? <DayTimeline employeeId={timeline.employee_id} name={timeline.full_name} day={timeline.work_date} tz={tz} onClose={() => setTimeline(null)} /> : null}
     </>
   );
 }
@@ -195,7 +206,7 @@ function SortTh({ label, k, sort, onSort }: { label: string; k: keyof RegisterRo
   );
 }
 
-function DayTable({ rows, tz, fmt, sort, onSort, showDate }: { rows: RegisterRow[]; tz: string; fmt: string; sort: { key: keyof RegisterRow; dir: 1 | -1 }; onSort: (k: keyof RegisterRow) => void; showDate: boolean }) {
+function DayTable({ rows, tz, fmt, sort, onSort, showDate, src, onTimeline }: { rows: RegisterRow[]; tz: string; fmt: string; sort: { key: keyof RegisterRow; dir: 1 | -1 }; onSort: (k: keyof RegisterRow) => void; showDate: boolean; src: DaySourceMap | null | undefined; onTimeline: (r: RegisterRow) => void }) {
   return (
     <div className="table-wrap">
       <table className="table">
@@ -211,6 +222,7 @@ function DayTable({ rows, tz, fmt, sort, onSort, showDate }: { rows: RegisterRow
             <SortTh label="Working hours" k="worked_min" sort={sort} onSort={onSort} />
             <SortTh label="Late" k="late_min" sort={sort} onSort={onSort} />
             <SortTh label="Status" k="status" sort={sort} onSort={onSort} />
+            <th scope="col">Source</th>
             <th scope="col"><span className="sr-only">Actions</span></th>
           </tr>
         </thead>
@@ -223,7 +235,7 @@ function DayTable({ rows, tz, fmt, sort, onSort, showDate }: { rows: RegisterRow
               {showDate ? <td>{formatDay(r.work_date, fmt)}</td> : null}
               <td>{r.shift_name ?? <span className="muted">—</span>}</td>
               <td>{r.first_in ? clock(r.first_in, tz) : "—"}</td>
-              <td>{r.last_out ? clock(r.last_out, tz) : "—"}</td>
+              <td>{r.last_out ? clock(r.last_out, tz) : src?.get(daySourceKey(r.employee_id, r.work_date))?.pending ? <ProvisionalOut /> : "—"}</td>
               <td>{r.worked_min ? hm(r.worked_min) : "—"}{r.half_day ? <span className="tiny muted block">Half day</span> : null}</td>
               <td>{r.late_min ? <span className="text-warning">{hm(r.late_min)}</span> : "—"}</td>
               <td>
@@ -231,7 +243,13 @@ function DayTable({ rows, tz, fmt, sort, onSort, showDate }: { rows: RegisterRow
                 {r.pending_correction ? <span className="tiny muted block">Correction pending</span> : null}
                 {r.status === "on_leave" && r.note ? <span className="tiny muted block">{r.note}</span> : null}
               </td>
-              <td><Link className="btn ghost sm" href={`/employees?id=${r.employee_id}`}>View</Link></td>
+              <td><SourceBadges day={src?.get(daySourceKey(r.employee_id, r.work_date))} /></td>
+              <td>
+                <div className="row-actions v">
+                  <button type="button" className="btn ghost sm" onClick={() => onTimeline(r)} aria-label={`Timeline for ${r.full_name}, ${formatDay(r.work_date, fmt)}`}>Timeline</button>
+                  <Link className="btn ghost sm" href={`/employees?id=${r.employee_id}`}>View</Link>
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>

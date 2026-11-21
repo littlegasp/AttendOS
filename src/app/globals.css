@@ -933,3 +933,17 @@ html[data-theme="dark"] .map .leaflet-tile-pane { filter: invert(1) hue-rotate(1
 .bio-demo-note { margin: 0; font-style: italic; }
 .modal .check-row { align-items: flex-start; }
 .modal .check-row input { margin-top: 2px; flex: none; }
+/* B4: attendance sources, day timeline, provisional check-out (semantic tokens only). */
+.timeline-cards { display: none; list-style: none; margin: 0; padding: 0; flex-direction: column; gap: var(--s3); }
+.timeline-table tr.muted-row th, .timeline-table tr.muted-row td:first-child { color: var(--color-text-2); }
+.src-cell { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.prov-out { display: inline-flex; flex-direction: column; gap: 2px; max-width: 124px; white-space: normal; }
+.src-cell { max-width: 110px; }
+.prov-out .badge { align-self: flex-start; }
+.bio-live strong { display: block; }
+@media (max-width: 767px) {
+  .timeline-table { display: none; }
+  .timeline-cards { display: flex; }
+  .day-timeline .table-wrap:has(.timeline-table) { display: none; }
+}
+.row-actions.v { flex-direction: column; align-items: stretch; gap: 4px; }

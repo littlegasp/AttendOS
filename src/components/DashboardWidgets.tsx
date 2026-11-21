@@ -183,7 +183,7 @@ export function Activity({ rows, tz }: { rows: Summary["recent_activity"]; tz: s
           <span>
             <strong>{a.name}</strong> {ACT[a.kind] ?? a.kind}
             {a.kind === "in" || a.kind === "out" ? <span className="meta"> · {a.work_mode === "remote" ? "remote" : a.location ?? "office"}</span> : null}
-            {a.source === "correction" ? <span className="meta"> · by correction</span> : null}
+            {a.source === "correction" ? <span className="meta"> · by correction</span> : a.source === "biometric" ? <span className="meta"> · biometric device</span> : a.source === "import" ? <span className="meta"> · imported</span> : null}
           </span>
           <span className="meta act-time">{clock(a.at, tz)}</span>
         </li>

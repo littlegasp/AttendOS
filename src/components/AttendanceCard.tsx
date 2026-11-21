@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { DayTimeline } from "./DayTimeline";
 import { IconAlert, IconCheck, NavIcon } from "./Icons";
 import { EmptyState } from "./States";
 import { Button, GlassCard, SectionCard, StatusBadge } from "./ui";
@@ -18,6 +20,9 @@ import {
   type Today,
 } from "@/lib/attendance";
 import type { useAttendance } from "@/lib/use-attendance";
+import { missingFunction, verificationOf } from "@/lib/sources";
+import { supabase } from "@/lib/supabase";
+import { useLoad } from "@/lib/use-load";
 
 type Att = ReturnType<typeof useAttendance>;
 
@@ -204,10 +209,41 @@ const KIND_TEXT: Record<AttendanceEvent["kind"], string> = { in: "Checked in", o
 
 export function Timeline({ t }: { t: Today }) {
   const tz = t.timezone;
+  const [full, setFull] = useState(false);
+  // A biometric check-out that is only provisional is not an attendance row yet (migration 0012); ask the database.
+  const pending = useLoad(async () => {
+    const { data, error } = await supabase().rpc("biometric_day_pending", { p_emp: t.employee.id, p_day: t.work_date });
+    if (error) {
+      if (missingFunction(error)) return null;
+      throw error;
+    }
+    return (Array.isArray(data) ? data[0] : data) as { pending_checkout: boolean; provisional_out_at: string | null; final_at: string | null } | null;
+  }, `pending:${t.employee.id}:${t.work_date}:${t.events.length}:${t.state}`);
+  const p = pending.data?.pending_checkout ? pending.data : null;
+  const more = (
+    <>
+      {p?.provisional_out_at ? (
+        <div className="alert warning" role="note" data-testid="today-provisional">
+          <p>
+            <strong>Provisional check-out at {clock(p.provisional_out_at, tz)}</strong> from a biometric device. It is not counted in your hours yet — it becomes final when the day
+            closes{p.final_at ? ` (${clock(p.final_at, tz)})` : ""}. Overtime and early leaving are worked out only then.
+          </p>
+        </div>
+      ) : null}
+      <button type="button" className="link-btn small" onClick={() => setFull(true)}>Full day timeline (all sources and device punches)</button>
+      {full ? <DayTimeline employeeId={t.employee.id} name={t.employee.full_name} day={t.work_date} tz={tz} onClose={() => setFull(false)} /> : null}
+    </>
+  );
   if (t.events.length === 0) {
-    return <EmptyState compact title="No check-ins yet today" body={t.plan.work_mode === "off" ? "Enjoy your day off." : "Your check-in, breaks and check-out will appear here."} />;
+    return (
+      <>
+        <EmptyState compact title="No check-ins yet today" body={t.plan.work_mode === "off" ? "Enjoy your day off." : "Your check-in, breaks and check-out will appear here."} />
+        {more}
+      </>
+    );
   }
   return (
+    <>
     <ol className="timeline">
       {t.events.map((e, i) => (
         <li key={`${e.at}-${i}`} className={`tl-item ${e.kind}`}>
@@ -217,13 +253,15 @@ export function Timeline({ t }: { t: Today }) {
             <span className="meta block">
               {e.kind.startsWith("break")
                 ? "No location read for breaks"
-                : `${e.work_mode === "remote" ? "Remote" : e.location ?? "Office"}${e.distance_m !== null ? ` · ${e.distance_m} m from the office point` : ""}${
+                : `${e.source === "biometric" || e.source === "import" ? `${verificationOf(e).label} · not GPS-verified` : `${e.work_mode === "remote" ? "Remote" : e.location ?? "Office"}${e.distance_m !== null ? ` · ${e.distance_m} m from the office point` : ""}${
                     e.source === "correction" ? " · added by an approved correction" : e.verified ? " · location verified" : " · no location"
-                  }`}
+                  }`}`}
             </span>
           </div>
         </li>
       ))}
     </ol>
+    {more}
+    </>
   );
 }

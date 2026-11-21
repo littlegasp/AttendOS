@@ -5,15 +5,25 @@ import { IconInfo } from "@/components/Icons";
 import { Tabs } from "@/components/Tabs";
 import { type AttendanceStatus, StatusBadge } from "@/components/ui";
 import { type Action, CONN_LABEL, type Conn, type DemoState, DemoRuleError, type Office, type Person, reducer } from "@/lib/biometric-mock";
+import { liveAction, liveAddDevice, type LiveAction, type NewDevice } from "@/lib/biometric-live";
 import { can, type Capability, type Role } from "@/lib/permissions";
+import { friendlyError, supabase } from "@/lib/supabase";
 
 type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type DemoAction = DistOmit<Action, "role" | "by">;
 
 interface Demo {
   state: DemoState;
-  /** Applies a demonstration action locally, as the signed-in role. Returns an error message when a rule or permission blocks it. */
-  apply: (a: DemoAction) => string | null;
+  /**
+   * Applies an action as the signed-in role. Demonstration (preview): changes this tab only. Live (B4): calls the
+   * checked database function and reloads. Resolves to an error message when a rule or permission blocks it.
+   */
+  apply: (a: DemoAction) => Promise<string | null>;
+  /** Registers a device; resolves to its new id. */
+  addDevice: (d: NewDevice) => Promise<{ error: string | null; id?: string }>;
+  /** True when the screens show the company's real records (connected); false for the preview demonstration. */
+  live: boolean;
+  reload: () => void;
   people: Person[];
   offices: Office[];
   samplePeople: boolean;
@@ -31,8 +41,8 @@ export function DemoProvider({ initial, people, offices, samplePeople, role, by,
   const ref = useRef(state);
   ref.current = state;
   const [now] = useState(() => Date.now());
-  const apply = useCallback(
-    (a: DemoAction) => {
+  const run = useCallback(
+    (a: DemoAction): string | null => {
       try {
         const next = reducer(people)(ref.current, { ...a, role, by } as Action);
         ref.current = next;
@@ -45,8 +55,69 @@ export function DemoProvider({ initial, people, offices, samplePeople, role, by,
     },
     [people, role, by],
   );
+  const apply = useCallback(async (a: DemoAction) => run(a), [run]);
+  const addDevice = useCallback(
+    async (d: NewDevice) => {
+      const id = `dev-${ref.current.seq + 1}`; // the reducer's id for the next record
+      const error = run({ type: "addDevice", device: { ...d, firmware: "", createdBy: by } });
+      return error ? { error } : { error: null, id };
+    },
+    [run, by],
+  );
   const may = useCallback((c: Capability) => can(role, c), [role]);
-  return <Ctx.Provider value={{ state, apply, people, offices, samplePeople, role, may, by, tz, now }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ state, apply, addDevice, live: false, reload: () => undefined, people, offices, samplePeople, role, may, by, tz, now }}>{children}</Ctx.Provider>;
+}
+
+/**
+ * Live company data (B4). The state comes from the database (see lib/biometric-live.ts); every action calls a checked
+ * database function, which enforces the role again, and then the screens reload.
+ */
+export function LiveProvider({ state, people, offices, role, by, tz, now, reload, children }: { state: DemoState; people: Person[]; offices: Office[]; role: Role; by: string; tz: string; now: number; reload: () => void; children: React.ReactNode }) {
+  const ref = useRef(state);
+  ref.current = state;
+  const apply = useCallback(
+    async (a: DemoAction) => {
+      if (a.type === "reset" || a.type === "addDevice") return "Not available for company data.";
+      try {
+        const err = await liveAction(supabase(), ref.current, a as LiveAction);
+        if (!err) reload();
+        return err;
+      } catch (e) {
+        return friendlyError(e);
+      }
+    },
+    [reload],
+  );
+  const addDevice = useCallback(
+    async (d: NewDevice) => {
+      try {
+        const r = await liveAddDevice(supabase(), d);
+        if (!r.error) reload();
+        return r;
+      } catch (e) {
+        return { error: friendlyError(e) };
+      }
+    },
+    [reload],
+  );
+  const may = useCallback((c: Capability) => can(role, c), [role]);
+  return <Ctx.Provider value={{ state, apply, addDevice, live: true, reload, people, offices, samplePeople: false, role, may, by, tz, now }}>{children}</Ctx.Provider>;
+}
+
+/** Shown at the top of every biometric screen when it holds the company's real records. */
+export function LiveBanner({ loading }: { loading: boolean }) {
+  return (
+    <div className="alert info bio-live" role="note" aria-label="Company data">
+      <IconInfo />
+      <div className="bio-demo-body">
+        <strong>Company records — changes here are saved and audited.</strong>
+        <p>
+          Devices, codes, sync runs and review items are this company&rsquo;s real records. Punches arrive only through a registered Sync Agent; this screen never contacts a device.
+          Device test and sync controls arrive with the Sync Agent.{loading ? " Updating…" : ""}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export function useDemo(): Demo {
@@ -111,7 +182,22 @@ export function BioTabs<T extends string>(props: { tabs: { id: T; label: string;
 const CONN_STATUS: Record<Conn, AttendanceStatus> = { online: "verified", offline: "absent", error: "failed", never: "weekly-off", disabled: "weekly-off" };
 
 export function ConnBadge({ conn }: { conn: Conn }) {
-  return <StatusBadge status={CONN_STATUS[conn]} label={`${CONN_LABEL[conn]}${conn === "disabled" ? "" : " · demo"}`} />;
+  const { live } = useDemo();
+  return <StatusBadge status={CONN_STATUS[conn]} label={`${CONN_LABEL[conn]}${conn === "disabled" || live ? "" : " · demo"}`} />;
+}
+
+/** Agent status label: "· demo" only in the demonstration. */
+export function AgentBadge({ status }: { status: "online" | "offline" | "revoked" }) {
+  const { live } = useDemo();
+  const label = status === "online" ? "Online" : status === "revoked" ? "Revoked" : "Offline";
+  return <span className={`badge tone-${status === "online" ? "success" : status === "revoked" ? "neutral" : "danger"}`}><span className="badge-dot" aria-hidden="true" />{label}{live ? "" : " · demo"}</span>;
+}
+
+/** The success toast wording: "saved" for company data, "demonstration — not saved" otherwise. */
+export function useSaved() {
+  const { live } = useDemo();
+  return (what: string, demoBody: string, liveBody = "Saved and recorded with your name and the time.") =>
+    live ? { title: what, body: liveBody } : { title: `${what} (demonstration — not saved)`, body: demoBody };
 }
 
 export function fmtTime(iso: string | null, tz: string): string {
@@ -141,7 +227,7 @@ export function drift(s: number | null): string {
 /** Buttons for real-hardware actions that arrive in later phases: visible, explained, never pretending. */
 export function NotYet({ label, phase }: { label: string; phase: string }) {
   return (
-    <button type="button" className="btn secondary sm" disabled title={`Available in Phase ${phase} — no hardware connection in this demonstration`}>
+    <button type="button" className="btn secondary sm" disabled title={phase === "Agent" ? "Arrives with the Sync Agent — this screen never contacts a device" : `Available in Phase ${phase} — no hardware connection in this demonstration`}>
       <span>{label}</span>
       <span className="bio-later">{phase}</span>
     </button>
@@ -150,5 +236,7 @@ export function NotYet({ label, phase }: { label: string; phase: string }) {
 
 /** One line repeated in every dialog so a decision is never mistaken for a real change. */
 export function DemoNote() {
+  const { live } = useDemo();
+  if (live) return <p className="meta bio-demo-note">Saved to the company records and kept in the history with your name, role and the time. No device is contacted.</p>;
   return <p className="meta bio-demo-note">Demonstration: only this browser tab changes. Nothing is sent to a device or saved to the database.</p>;
 }

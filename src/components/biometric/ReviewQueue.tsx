@@ -7,7 +7,7 @@ import { Button, FormTextarea, GlassCard, StatusBadge } from "@/components/ui";
 import { DECISION, type Decision, DECISIONS_FOR, REVIEW_LABEL, type ReviewItem, type ReviewKind, reviewEmployee } from "@/lib/biometric-mock";
 import { toast } from "@/lib/toast";
 import { MappingForm } from "./Mapping";
-import { DemoNote, fmtTime, useDemo } from "./shared";
+import { DemoNote, fmtTime, useDemo, useSaved } from "./shared";
 
 const STATUS_TEXT: Record<ReviewItem["status"], string> = { open: "Waiting for review", resolved: "Resolved", dismissed: "Dismissed" };
 
@@ -53,8 +53,8 @@ export function ReviewQueue() {
         <ul className="bio-review">
           {rows.map((r) => {
             const d = state.devices.find((x) => x.id === r.raw.deviceId);
-            const m = reviewEmployee(state, r);
-            const p = m ? people.find((x) => x.id === m.employeeId) : null;
+            const empId = r.employeeId !== undefined ? r.employeeId : reviewEmployee(state, r)?.employeeId ?? null;
+            const p = empId ? people.find((x) => x.id === empId) : null;
             return (
               <li key={r.id} className="bio-review-item" data-review={r.id}>
                 <div className="bio-review-main">
@@ -65,7 +65,7 @@ export function ReviewQueue() {
                   <dl className="rules-view compact">
                     <dt>Employee</dt>
                     <dd className="bio-wrap">{p ? <>{p.full_name}{p.emp_code ? <span className="muted"> · {p.emp_code}</span> : null}</> : <span className="muted">Not mapped on this device</span>} · device code <span className="mono">{r.raw.code}</span></dd>
-                    <dt>Device</dt><dd className="bio-wrap">{d?.name ?? "Removed device"} · serial <span className="mono">{r.raw.deviceSerial}</span></dd>
+                    <dt>Device</dt><dd className="bio-wrap">{d ? <>{d.name} · serial <span className="mono">{r.raw.deviceSerial}</span></> : r.raw.deviceSerial === "import" ? "Imported file (no device)" : <>Removed device · serial <span className="mono">{r.raw.deviceSerial}</span></>}</dd>
                     <dt>Original device time</dt><dd><span className="mono">{r.raw.deviceLocalTime}</span> <span className="meta">device clock, {r.raw.deviceTimezone}</span></dd>
                     <dt>Received</dt><dd>{fmtTime(r.raw.receivedAt, tz)} <span className="meta">by AttendOS</span></dd>
                     <dt>Reason for review</dt><dd>{r.reason}</dd>
@@ -73,6 +73,8 @@ export function ReviewQueue() {
                   </dl>
                 </div>
                 <div className="bio-review-actions">
+                  {r.kind === "correction_needed" && r.status === "open" ? <p className="tiny muted">Ask the employee to request an attendance correction for that day; it is decided in Corrections.</p> : null}
+                  {r.kind === "held" && r.status === "open" ? <p className="tiny muted">No decision needed now: the punch is looked at again automatically.</p> : null}
                   {r.status === "open" && decide ? (
                     <>
                       {r.kind === "unmatched" && may("mapBiometricCodes") ? <Button size="sm" variant="primary" onClick={() => setMapFor(r)}>Map employee</Button> : null}
@@ -110,20 +112,25 @@ export function ReviewQueue() {
 
 function DecisionDialog({ item, decision, onClose }: { item: ReviewItem; decision: Decision; onClose: () => void }) {
   const { apply, state, people } = useDemo();
+  const saved = useSaved();
   const d = DECISION[decision];
   const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const m = reviewEmployee(state, item);
-  const p = m ? people.find((x) => x.id === m.employeeId) : null;
+  const empId = item.employeeId !== undefined ? item.employeeId : reviewEmployee(state, item)?.employeeId ?? null;
+  const p = empId ? people.find((x) => x.id === empId) : null;
   return (
     <Modal open title={d.label} subtitle={`${REVIEW_LABEL[item.kind]} · ${p?.full_name ?? `code ${item.raw.code}`} · ${item.raw.deviceLocalTime}`} onClose={onClose}>
       <form
         className="stack"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
-          const err = apply({ type: "review", reviewId: item.id, decision, note });
+          setBusy(true);
+          const err = await apply({ type: "review", reviewId: item.id, decision, note });
+          setBusy(false);
           if (err) return setError(err);
-          toast({ tone: "success", title: `${d.label} — recorded in this demonstration only`, body: "Added to the item's history. Nothing was saved to the database." });
+          const t = saved(d.label, "Added to the item's history. Nothing was saved to the database.", "Saved and added to the item's history. The device record is not changed.");
+          toast({ tone: "success", title: t.title.replace(" (demonstration — not saved)", " — recorded in this demonstration only"), body: t.body });
           onClose();
         }}
       >
@@ -133,7 +140,7 @@ function DecisionDialog({ item, decision, onClose }: { item: ReviewItem; decisio
         <DemoNote />
         <div className="dialog-actions">
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant={decision === "dismiss" ? "danger" : "primary"}>{d.label}</Button>
+          <Button type="submit" variant={decision === "dismiss" ? "danger" : "primary"} loading={busy}>{d.label}</Button>
         </div>
       </form>
     </Modal>

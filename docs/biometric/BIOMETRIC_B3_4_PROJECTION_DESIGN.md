@@ -852,6 +852,20 @@ directly; the schedule is verified on hosted only after separate approval (Q1).
 
 ## 13. Implemented vs proposed
 
+**Owner decision, 21 Nov 2026 (approved; final for B3.4): delayed device-mode IN/OUT pair selection.**
+When a delayed IN on a finished day is evaluated together with the OUT that would close it (implementation report §11–§12):
+- punches HR has already resolved as non-attendance are passed over — dismissed punches, confirmed duplicates
+  (`rejected`) and extra/reconciled roles HR decided;
+- pairing is blocked when an intervening punch is unresolved, flagged, held, a possible duplicate, correction_needed,
+  without a reliable direction, on another work date, already counted, or otherwise makes the sequence ambiguous —
+  the IN goes to correction_needed (`would_open_closed_day`) and the intervening punch keeps its own state;
+- atomic pair writes, write budgets, stable attendance-event ids, correction references and the per-employee lock are
+  unchanged;
+- an IN sent to correction_needed is **never re-paired automatically**; HR resolves it through the established
+  correction workflow.
+Implemented in migration 0012 as committed in `08cb9f4` (no further logic change for this decision).
+
+
 **Update 20 Nov 2026 (after approval of revision 6):** migration 0012 is now **implemented and tested locally** —
 see BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md (843 database checks, 12 concurrency proofs, 17 HTTP checks, regression
 suites; deviations listed there in §7). The UI items of §11 are not implemented yet. The table below is the state at
