@@ -2,10 +2,11 @@
 
 import { clock, shortDate } from "@/lib/attendance";
 import { useSession } from "@/lib/session";
-import { type DayEvent, missingFunction, punchLabel, punchTone, sourceLabel, SOURCE_TONE, type Tone, verificationOf } from "@/lib/sources";
+import { type DayEvent, missingFunction, punchLabel, punchTone, type Tone, verificationOf } from "@/lib/sources";
 import { supabase } from "@/lib/supabase";
 import { useLoad } from "@/lib/use-load";
 import { Modal } from "./Modal";
+import { SourceBadge } from "./SourceBadges";
 import { EmptyState, ErrorState, LoadingState } from "./States";
 
 const KIND: Record<string, string> = { in: "IN", out: "OUT", break_start: "Break start", break_end: "Break end" };
@@ -100,7 +101,7 @@ function TimelineBody({ data, tz }: { data: Loaded; tz: string }) {
                 <li key={`c-${i}`} className="history-card">
                   <div className="hc-top">
                     <strong>{clock(e.at, tz)} · {direction(e, e.raw_event_id ? directions.get(e.raw_event_id) : undefined)}</strong>
-                    <Badge tone={SOURCE_TONE[e.source] ?? "neutral"}>{sourceLabel(e.source)}</Badge>
+                    <SourceBadge source={e.source} />
                   </div>
                   <p className="meta">{e.device ? `${e.device} · ` : ""}{s.text}{s.note ? ` · ${s.note}` : ""}</p>
                 </li>
@@ -139,7 +140,7 @@ function Row({ e, tz, dir }: { e: DayEvent; tz: string; dir?: string }) {
     <tr className={e.counted ? undefined : "muted-row"} data-source={e.source} data-counted={e.counted ? "yes" : "no"}>
       <th scope="row">{clock(e.at, tz)}</th>
       <td>{direction(e, dir)}</td>
-      <td><Badge tone={SOURCE_TONE[e.source] ?? "neutral"}>{sourceLabel(e.source)}</Badge></td>
+      <td><SourceBadge source={e.source} /></td>
       <td className="bio-wrap">{e.device ?? <span className="muted">—</span>}</td>
       <td><Badge tone={s.tone}>{s.text}</Badge>{s.note ? <span className="tiny muted block">{s.note}</span> : null}</td>
     </tr>

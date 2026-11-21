@@ -947,3 +947,20 @@ html[data-theme="dark"] .map .leaflet-tile-pane { filter: invert(1) hue-rotate(1
   .day-timeline .table-wrap:has(.timeline-table) { display: none; }
 }
 .row-actions.v { flex-direction: column; align-items: stretch; gap: 4px; }
+/* B4 accessibility: source badges (Web / Biometric / Imported / Correction) meet WCAG AA in both themes.
+   Text = the source tone mixed with the theme's text colour (lighter in dark, darker in light); background = a light
+   tint of the tone over the theme surface (opaque, so the glass behind it cannot lower the contrast). Status badges
+   are unchanged. Each source keeps its own marker shape so colour is never the only cue. */
+.badge.src-badge {
+  color: color-mix(in srgb, var(--tone) 55%, var(--color-text));
+  background: color-mix(in srgb, var(--tone) 14%, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  filter: none;
+}
+html[data-theme="light"] .badge.src-badge { filter: none; }
+.src-badge .badge-dot { width: 7px; height: 7px; border: 0; transform: none; }
+.src-web .badge-dot { border-radius: 50%; background: currentColor; }
+.src-biometric .badge-dot { border-radius: 50%; background: none; border: 2px solid currentColor; width: 8px; height: 8px; }
+.badge.src-badge.src-import { border-style: dashed; }
+.src-import .badge-dot { border-radius: 1px; background: currentColor; }
+.src-correction .badge-dot { border-radius: 1px; background: currentColor; transform: rotate(45deg); }

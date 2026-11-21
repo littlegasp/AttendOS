@@ -206,3 +206,49 @@ test("B4 privacy scan: no raw payload function, no raw table, no direct writes, 
     assert.doesNotMatch(src, /#[0-9a-fA-F]{3,8}\b/, "no hard-coded colours");
   }
 });
+
+/* ------------------------------------------------------------------ source badge contrast (WCAG AA ≥ 4.5:1), both themes */
+
+/** Reads a theme's colour tokens and the .src-badge mix percentages from globals.css and works out the painted colours. */
+function sourceBadgeContrast(): Record<"dark" | "light", Record<string, number>> {
+  const css = readFileSync(join(__dirname, "../src/app/globals.css"), "utf8");
+  const block = (sel: string) => css.slice(css.indexOf(sel)).split("}")[0]!;
+  const tokens = (b: string) => Object.fromEntries([...b.matchAll(/--(color-[a-z0-9-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1]!, m[2]!]));
+  const dark = tokens(block(":root,"));
+  const light = { ...dark, ...tokens(block('html[data-theme="light"] {')) };
+  const rule = block(".badge.src-badge {");
+  const fgPct = Number(/color:\s*color-mix\(in srgb, var\(--tone\) (\d+)%, var\(--color-text\)\)/.exec(rule)![1]) / 100;
+  const bgPct = Number(/background:\s*color-mix\(in srgb, var\(--tone\) (\d+)%, var\(--color-surface\)\)/.exec(rule)![1]) / 100;
+  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const mix = (a: number[], b: number[], p: number) => a.map((v, i) => v * p + b[i]! * (1 - p));
+  const lum = (c: number[]) => { const [r, g, b] = c.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!; };
+  const ratio = (a: number[], b: number[]) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const TONE: Record<string, string> = { web: "color-text-muted", biometric: "color-info", import: "color-info", correction: "color-warning" };
+  const out = {} as Record<"dark" | "light", Record<string, number>>;
+  for (const [name, t] of [["dark", dark], ["light", light]] as const) {
+    out[name] = Object.fromEntries(Object.entries(TONE).map(([src, tok]) => {
+      const tone = rgb(t[tok]!);
+      return [src, ratio(mix(tone, rgb(t["color-text"]!), fgPct), mix(tone, rgb(t["color-surface"]!), bgPct))];
+    }));
+  }
+  return out;
+}
+
+test("B4 source badges meet WCAG AA (≥ 4.5:1) for Web, Biometric, Imported and Correction in dark and light themes", () => {
+  const r = sourceBadgeContrast();
+  for (const theme of ["dark", "light"] as const) {
+    for (const src of ["web", "biometric", "import", "correction"]) assert.ok(r[theme][src]! >= 4.5, `${theme} ${src}: ${r[theme][src]!.toFixed(2)}:1`);
+  }
+  console.log("source badge contrast", JSON.stringify(Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Object.fromEntries(Object.entries(v).map(([a, b]) => [a, Number(b.toFixed(2))]))]))));
+});
+
+test("B4 source badges: a marker shape per source (colour is not the only cue); status badges are not restyled", () => {
+  const css = readFileSync(join(__dirname, "../src/app/globals.css"), "utf8");
+  for (const s of ["web", "biometric", "correction"]) assert.match(css, new RegExp(`\\.src-${s} \\.badge-dot \\{[^}]+\\}`));
+  assert.match(css, /\.src-import \.badge-dot/);
+  assert.match(css, /\.badge\.src-badge\.src-import \{ border-style: dashed; \}/);
+  assert.match(css, /\.metric-ic, \.badge \{ color: var\(--tone\); background: color-mix\(in srgb, var\(--tone\) calc\(var\(--tint-alpha\) \* 100%\), transparent\); \}/, "base badge rule unchanged");
+  assert.match(css, /html\[data-theme="light"\] \.badge \{ filter: saturate\(1\.1\) brightness\(\.85\); \}/, "status badge light filter unchanged");
+  const comp = readFileSync(join(__dirname, "../src/components/SourceBadges.tsx"), "utf8");
+  assert.match(comp, /src-badge src-\$\{/);
+});

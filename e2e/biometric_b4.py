@@ -333,55 +333,79 @@ with sync_playwright() as p:
     check(not any("biometric_raw_events_safe" in u for u in rec_emp.urls), "Employee: never asks for raw device records (direction lookup is HR/Admin only)")
     c.close()
 
-    # ================================================================ 9–10. themes and sizes
+    # ================================================================ 9–10. themes and sizes (visual regression after the badge colours)
+    import datetime as _dt
     sizes = {"phone": (390, 844), "tablet": (820, 1180), "desktop": (1440, 900)}
-    matrix = []
+    SCREENS = [  # (who, path, name, action)
+        ("a1", "/biometric", "overview", None), ("a1", "/biometric?tab=devices", "devices", None), ("a1", "/biometric?tab=mapping", "mapping", None),
+        ("a1", "/biometric?tab=sync", "sync", None), ("a1", "/biometric?tab=review", "review", None), ("b2", "/attendance", "register", None),
+        ("c7", "/my-attendance", "my-attendance", None), ("c7", "/my-attendance", "timeline", "timeline"), ("b2", "/settings", "verification-history", "verification"),
+    ]
+    FOCUS_JS = """() => { const e = document.activeElement; if (!e || e === document.body) return null; const cs = getComputedStyle(e);
+      return (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0) || (cs.boxShadow && cs.boxShadow !== 'none'); }"""
+    matrix, focus_ok = [], []
     for theme in ("dark", "light"):
         for label, (w, h) in sizes.items():
-            for who, path, name in (("a1", "/biometric", "biometric"), ("a1", "/biometric?tab=review", "review"), ("b2", "/attendance", "register"), ("c7", "/my-attendance", "my-attendance")):
+            for who, path, name, action in SCREENS:
                 c = Ctx(br, who, theme=theme)
                 c.page.set_viewport_size({"width": w, "height": h})
                 pg = c.go(path)
                 pg.wait_for_timeout(700)
-                ok = no_sideways(pg) and not c.errors
-                tag = f"{name}-{label}-{theme}"
-                if name in ("biometric", "register", "my-attendance") or label == "phone":
-                    shot(pg, tag, full=False)
-                if name == "register":
-                    # the wide register table scrolls inside its card; the page itself never scrolls sideways
-                    ok = ok and pg.evaluate("[...document.querySelectorAll('.table-wrap')].every(e => getComputedStyle(e).overflowX !== 'visible')")
-                if name == "my-attendance" and label in ("phone", "tablet"):
+                if action == "timeline":
                     pg.get_by_role("tab", name="History").click()
                     pg.wait_for_timeout(1200)
-                    btn = pg.locator("button:visible", has_text=re.compile(r"^(Timeline|\w{3}, \d+ \w{3})$")).first
-                    btn.click()
+                    pg.locator("button:visible", has_text=re.compile(r"^(Timeline|\w{3}, \d+ \w{3})$")).first.click()
                     pg.locator("dialog[open]").get_by_text("Day timeline").first.wait_for()
                     pg.wait_for_timeout(600)
-                    ok = ok and no_sideways(pg) and pg.locator("dialog[open]").evaluate("d => d.scrollWidth <= d.clientWidth + 1")
-                    shot(pg, f"timeline-{label}-{theme}", full=False)
-                matrix.append((tag, ok, c.errors[:2]))
+                elif action == "verification":
+                    pg.get_by_role("tab", name="Verification history").click()
+                    pg.wait_for_timeout(1500)
+                ok = no_sideways(pg) and not c.errors
+                if action == "timeline":
+                    ok = ok and pg.locator("dialog[open]").evaluate("d => d.scrollWidth <= d.clientWidth + 1")
+                if name == "review" and label == "desktop":
+                    pg.keyboard.press("Tab"); pg.keyboard.press("Tab"); pg.keyboard.press("Tab")
+                    focus_ok.append((theme, pg.evaluate(FOCUS_JS)))
+                shot(pg, f"{name}-{label}-{theme}", full=False)
+                matrix.append((f"{name}-{label}-{theme}", ok, c.errors[:2]))
                 c.close()
     bad = [m for m in matrix if not m[1]]
-    check(not bad, f"Themes × sizes: {len(matrix)} screen loads (dark/light × 390/820/1440 × module, review, register, my attendance + timeline) without sideways scrolling or console errors {bad}")
-    # badge readability in both themes: contrast of the new source badges, measured the way the browser paints them
-    # (tone colour, 12–16 % tint over the card, light theme's brightness filter), compared with the existing status badges
+    check(not bad, f"Visual regression: {len(matrix)} screen loads (9 screens incl. day timeline and verification history × dark/light × 390/820/1440) without sideways scrolling or console errors {bad}")
+    check(all(f[1] for f in focus_ok) and len(focus_ok) == 2, f"Keyboard focus stays visible in both themes ({focus_ok})")
+
+    # source badge contrast as painted in the browser (WCAG AA ≥ 4.5:1), every source, both themes
+    RATIO_JS = r"""() => {
+      const rgba = (s) => { const n = s.match(/[\d.]+/g).map(Number); return s.startsWith('color(') ? [n[0]*255, n[1]*255, n[2]*255, n[3] ?? 1] : [n[0], n[1], n[2], n[3] ?? 1]; };
+      const lum = ([r,g,b]) => { const f = v => { v/=255; return v <= .03928 ? v/12.92 : ((v+.055)/1.055)**2.4 }; return .2126*f(r)+.7152*f(g)+.0722*f(b); };
+      const under = (el) => { let e = el.parentElement; while (e) { const c = rgba(getComputedStyle(e).backgroundColor); if (c[3] > 0.5) return c; e = e.parentElement; } return document.documentElement.dataset.theme === 'light' ? [255,255,255,1] : [9,14,23,1]; };
+      return [...document.querySelectorAll('.src-badge[data-source]')].filter(b => b.offsetParent !== null).map(b => { const cs = getComputedStyle(b); const fg = rgba(cs.color); const bg = rgba(cs.backgroundColor); const base = under(b);
+        const mix = [0,1,2].map(i => base[i]*(1-bg[3]) + bg[i]*bg[3]); const m = (cs.filter.match(/brightness\(([\d.]+)\)/) || [0, 1])[1] * 1;
+        const a = lum(fg.map(v => v*m)), x = lum(mix.map(v => v*m)); return [b.dataset.source, (Math.max(a,x)+.05)/(Math.min(a,x)+.05)]; });
+    }"""
+    painted = {}
     for theme in ("light", "dark"):
+        got = {}
+        def take(pg):
+            for src, r in pg.evaluate(RATIO_JS):
+                got.setdefault(src, []).append(r)
         c = Ctx(br, "b2", theme=theme)
-        pg = c.go("/attendance")
-        pg.locator("[data-source=biometric]").first.wait_for()
-        res = pg.evaluate("""() => {
-          const rgba = (s) => { const n = s.match(/[\\d.]+/g).map(Number); return s.startsWith('color(') ? [n[0]*255, n[1]*255, n[2]*255, n[3] ?? 1] : [n[0], n[1], n[2], n[3] ?? 1]; };
-          const lum = ([r,g,b]) => { const f = v => { v/=255; return v <= .03928 ? v/12.92 : ((v+.055)/1.055)**2.4 }; return .2126*f(r)+.7152*f(g)+.0722*f(b); };
-          const under = (el) => { let e = el.parentElement; while (e) { const c = rgba(getComputedStyle(e).backgroundColor); if (c[3] > 0.5) return c; e = e.parentElement; } return document.documentElement.dataset.theme === 'light' ? [255,255,255,1] : [15,23,42,1]; };
-          const ratio = (el) => { const cs = getComputedStyle(el); const fg = rgba(cs.color); const bg = rgba(cs.backgroundColor); const base = under(el);
-            const mix = [0,1,2].map(i => base[i]*(1-bg[3]) + bg[i]*bg[3]); const m = (cs.filter.match(/brightness\\(([\\d.]+)\\)/) || [0, 1])[1] * 1;
-            const a = lum(fg.map(v => v*m)), b = lum(mix.map(v => v*m)); return (Math.max(a,b)+.05)/(Math.min(a,b)+.05); };
-          const pick = (sel) => [...document.querySelectorAll(sel)].slice(0, 20).map(ratio);
-          return { source: pick('[data-source]'), status: pick('td .badge:not([data-source])') };
-        }""")
-        lo_src, lo_status = min(res["source"]), min(res["status"])
-        check(lo_src >= lo_status - 0.01, f"{theme} theme: source badges at least as readable as the existing status badges (lowest {lo_src:.2f}:1 vs {lo_status:.2f}:1)")
+        pg = c.go("/attendance"); pg.locator(".src-badge[data-source=web]").first.wait_for(); take(pg)
+        pg.get_by_role("tab", name="Employee detail").click()
+        pg.locator("label.filter-chip", has_text="Employee").locator("select").select_option(label="Deepak More")
+        pg.locator(".src-badge[data-source=correction]").first.wait_for(); take(pg)
+        pg.get_by_role("tab", name="Daily").click()
+        pg.locator("label.filter-chip", has_text="Employee").locator("select").select_option(value="")
+        pg.get_by_label("Date").fill(D(5)); pg.wait_for_timeout(1200)
+        pg.get_by_role("button", name="Timeline for Anita Kale").click()
+        pg.locator("dialog[open] .src-badge[data-source=import]").first.wait_for(); take(pg)
+        shot(pg, f"contrast-imported-{theme}", full=False)
+        pg.keyboard.press("Escape")
+        pg = c.go("/settings"); pg.get_by_role("tab", name="Verification history").click(); pg.wait_for_timeout(1500); take(pg)
         c.close()
+        painted[theme] = {k: round(min(v), 2) for k, v in got.items()}
+        check(set(painted[theme]) >= {"web", "biometric", "import", "correction"} and min(painted[theme].values()) >= 4.5,
+              f"{theme} theme: every source badge meets WCAG AA as painted (lowest per source {painted[theme]})")
+    json.dump(painted, open(os.path.join(OUT, "b4-contrast.json"), "w"), indent=1)
 
     # ================================================================ 14. empty, loading and error states
     c = Ctx(br, "a1", block="biometric_devices")
@@ -402,6 +426,7 @@ with sync_playwright() as p:
     pg.get_by_role("button", name=re.compile("Timeline for")).first.click()
     loading = pg.locator("dialog[open]").get_by_label("Loading the day").count() + pg.locator("dialog[open] .skeleton, dialog[open] [aria-busy=true]").count()
     check(loading >= 1, "Loading state: the timeline shows a loading placeholder while the day loads")
+    pg.locator("dialog[open] .timeline-table, dialog[open] .state").first.wait_for(timeout=15000)  # let the slowed request finish before closing
     c.close()
     # empty module: a company with no biometric records (Beta); make its employee an Admin for this check only
     beta = sql("select id from employees where email = 'ben@beta.co'")
