@@ -3,6 +3,8 @@
 Status: **DOCUMENTATION AND ARCHITECTURE ONLY — for owner review.** No code, migration, hosted SQL, device
 connection, device-setting change or eSSL software install. Date 21 Nov 2026. Branch `feature/biometric-b1`.
 
+**Revision 4 (DAT import readiness): BIOMETRIC_B5_REV4_DAT_IMPORT.md takes precedence for the DAT path.**
+
 **Document history:** Revision 1 (generic agent, `a1b4773`) → Revision 2 (eSSL first, `1cab101`) → **Revision 3
 (this document)**. Where they differ, Revision 3 wins. Revisions 1 and 2 remain the reference for the parts they
 specify and this one does not change:

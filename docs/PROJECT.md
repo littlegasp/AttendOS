@@ -365,3 +365,14 @@ inspection of an original file (none supplied yet). Trust limits per path; roadm
 (migration 0013, separate approval) → agent milestones; decisions R1–R10.
 docs/biometric/BIOMETRIC_B5_REV3_DESIGN.md. No code or migration.
 
+**B5 revision 4 — DAT import readiness (21 Nov 2026, design only):** owner accepted the three-path direction. Revision 4
+makes the DAT path buildable: upload/recovery state machine (resumable 256 KiB chunks with per-chunk and final SHA-256,
+token take-over, lazy expiry without pg_cron, incomplete batches never reviewable); file limits (16 MiB, 200,000 rows,
+512-byte lines, 16 fields, UTF-8, binary/encrypted refused, whole-file refusal leaves nothing behind); time handling
+(original string kept, declared zone per batch, separate instant, gap/overlap never guessed); mapping resolution
+(exact string, source device first, then company-wide, half-open validity at the punch instant; only `10` → WR198
+known); duplicate labels across DAT, SDK and ADMS without discarding rows; retention (file + rows 90 days, metadata
+3 years, audit for ever with no personal data — the generic audit trigger is not used because audit_log can never
+be cleaned); 50 tests. Found: historical DAT rows can't become raw events under the 31-day guard (R13).
+docs/biometric/BIOMETRIC_B5_REV4_DAT_IMPORT.md. Migration 0013 not written.
+
