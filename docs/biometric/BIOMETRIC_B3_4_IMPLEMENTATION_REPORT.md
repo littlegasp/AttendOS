@@ -1,6 +1,6 @@
 # Biometric B3.4 — implementation and test report (migration 0012, local only)
 
-Date: 20 Nov 2026; final review addendum 21 Nov 2026 (§11). Branch `feature/biometric-b1` (commit in §1). Authorisation: "B3.4 Revision 6 — Design Approved /
+Date: 20 Nov 2026; final review addendum 21 Nov 2026 (§11); pair-selection addendum 21 Nov 2026 (§12). Branch `feature/biometric-b1` (commit in §1). Authorisation: "B3.4 Revision 6 — Design Approved /
 Local Implementation Authorization". Design: BIOMETRIC_B3_4_PROJECTION_DESIGN.md revision 6.
 **Local only.** Nothing ran against hosted Supabase, staging or production; pg_cron was not installed or scheduled; no
 hardware was connected; projection was not enabled for any real company; nothing merged, tagged or deployed.
@@ -8,15 +8,16 @@ hardware was connected; projection was not enabled for any real company; nothing
 ## 1. Branch, commit, files
 
 Branch `feature/biometric-b1`; the commit that adds this report (see the completion message for the hash).
-Migration: `supabase/migrations/0012_biometric_projection.sql` (1,058 lines after the §11 fix; md5 `2ae9515cef774482d9cdc273b0fd5bc0`;
+Migration: `supabase/migrations/0012_biometric_projection.sql` (1,068 lines after the §12 fix; md5 `fe3d7599a90a8bd480c234a3887dacfb`;
+after §11 it was 1,058 lines, md5 `2ae9515cef774482d9cdc273b0fd5bc0`;
 first version in commit 9d25d12 was 1,006 lines, md5 `2e48dbf08cf0e7c389cac22142f41f1b`).
 
 | File | Change |
 |---|---|
 | `supabase/migrations/0012_biometric_projection.sql` | **new** — the approved revision 6 SQL (A0–A9) plus the fixes in §7 |
-| `supabase/tests/biometric_projection_test.sql` | **new** — 226 checks, groups P F G S H T V A D B Q U R (R added in §11) |
+| `supabase/tests/biometric_projection_test.sql` | **new** — 239 checks, groups P F G S H T V A D B Q U R RP (R added in §11, RP in §12) |
 | `supabase/tests/preflight_test.sh` | **new** — design test P1 on a clean database at 0011 |
-| `supabase/tests/concurrency/projection_proof.sh` | **new** — 15 two-session proofs (§12.3, H8, Q1, Q5; 9a/9b added in §11) |
+| `supabase/tests/concurrency/projection_proof.sh` | **new** — 17 two-session proofs (§12.3, H8, Q1, Q5; 9a/9b added in §11, 9c in §12) |
 | `e2e/biometric_projection_http.py` | **new** — 17 checks over real HTTP (PostgREST) |
 | `supabase/tests/run.sh` | adds 0012 and its suite after the gateway suite |
 | `supabase/tests/concurrency/lock_proof.sh` | scenarios 3–6 now test the migrated wrapper (control removes its lock line); stand-in projection writes a plain row |
@@ -57,7 +58,8 @@ Application code (`src/`) is **unchanged** (`git diff d8146c9 HEAD -- src` is em
 | U | sources (CSV), pending, day_events, permissions, shift-gap warning, verification history, no template/image columns | 26 | pass |
 | fixture | local noon check | 1 | pass |
 | R (§11) | delayed device-mode IN + OUT pairs: reconciled, rejected/flagged, lone, several, mixed app/biometric, re-presses, reversed, ambiguous, idempotence, budget | 16 | pass |
-| **SQL total** | `biometric_projection_test.sql` | **226** | **pass** |
+| RP (§12) | the punch after a delayed IN is judged in raw time order: flagged / held / possible-duplicate / correction_needed / no-direction OUT, later IN, flagged re-press, dismissed / rejected, late arrival inside a counted pair, idempotence | 13 | pass |
+| **SQL total** | `biometric_projection_test.sql` | **239** | **pass** |
 | Concurrency | `projection_proof.sh`: web check-in vs projection (20 rounds), correction vs projection (both orders), web check-out vs finalisation, two queue runs = one run, acceptance/review/mapping/ingest vs projection, accepted historic punch vs web check-in, not-due held punch not locked, mixed load ×5 | **12** | **pass**, 0 deadlocks |
 | Preflight | `preflight_test.sh` (P1) | **5** | **pass** |
 | HTTP | `biometric_projection_http.py` | **17** | **pass** |
@@ -79,7 +81,7 @@ same as one run.
 | `biometric_gateway_http.py` | 18/18 on a demo database with 0012 (projection off: "nothing reached attendance" still holds) |
 | `e2e/regression.py` (browser) | 29/29 on a demo database with 0012 — GPS cases, check-in/out, corrections, leave, exports, print, 208 screen loads |
 | `npm run check` / `npm run build` | 53/53; build ok (no app change) |
-| **Full database run** | **859 checks (633 + 226), exit status 0** (after §11; was 843) |
+| **Full database run** | **872 checks (633 + 239), exit status 0** (after §12; 859 after §11; 843 first) |
 
 ## 5. Security and permission verification (executed)
 
@@ -273,3 +275,110 @@ is covered by "R budget" (limit 6 writes nothing of the pair and leaves all four
 - **Pairs are conservative.** An IN with a second IN more than the reconciliation window later, an OUT pressed twice
   far apart, or any correction_needed punch earlier in the uncounted tail sends the IN to HR rather than guessing.
 - Everything in §9 still applies (UI phase before enabling, pg_cron, hosted limits untested, no hardware).
+
+## 12. Pair-selection addendum (21 Nov 2026): can the pair jump over an intervening punch?
+
+Request: "AttendOS B3.4 — Final Pair-Selection Edge-Case Review". Local only (same boundaries as §11).
+
+### 12.1 Finding confirmed: root cause
+
+In the §11 pair block, the search for the OUT that closes a delayed IN read **only projection candidates** (stored, or
+undecided extra/reconciled, no projected row, same work date) and took the first one. A raw punch between the IN and
+the OUT in any **other** state was invisible to it, so the IN was paired with a later OUT across it. Reproduced
+against the §11 migration (output of the new tests run on it, 12.3): IN 09:00 → flagged / held / possible-duplicate /
+correction_needed OUT 12:00 → OUT 17:00 all counted **09:00–17:00**, and so did a flagged IN re-press at 09:02. If HR
+later accepted the 12:00 punch, the day would already be stretched over it. Cases that were already safe: an
+intervening OUT without direction and a later stored IN (both are candidates, so the search stopped on them).
+
+### 12.2 The change (`biometric_project_day`, device pair block only)
+
+The search now reads **every raw punch of the person after the IN, in time order, in every state** (work dates p_day−1
+to p_day+1; no write is made by the search):
+- punches HR has already resolved as not attendance — `dismissed`, `rejected` (confirmed duplicate), or an
+  extra/reconciled role HR decided — are passed over (the gateway's own duplicate check treats them the same way);
+- the first other punch decides: it closes the IN only if it is a usable candidate OUT on the same work date passing
+  the §11 checks; a usable IN re-press within the reconciliation window is recorded extra as before;
+- anything else (flagged, held, possible duplicate, correction_needed, unmatched-then-mapped later, other work date,
+  already counted, no direction, a later IN) stops the search: the IN is **correction_needed** (`would_open_closed_day`)
+  and that punch is left in its own state for its own rules.
+
+Unchanged: atomic pair writes and the pair budget (4 + re-presses, last write reserved), slot ids, correction
+references, lock 7, the guard and source rules, first-in/last-out mode, engine functions. Full diff in the evidence
+ZIP (`13-migration-diff.patch`: §11 + §12 against commit 9d25d12; `14-pair-selection.patch`: §12 alone).
+
+### 12.3 New tests (group RP)
+
+Run against the **§11 migration** (before the fix; assertions reported instead of stopping):
+```
+FAILED (before fix) - RP1 IN, flagged OUT, valid OUT: the flagged OUT is not jumped over; IN correction_needed, the flagged OUT stays flagged, nothing counted, no open session
+FAILED (before fix) - RP2 IN, held OUT, valid OUT: IN correction_needed, the held OUT stays held with its reason, nothing counted
+FAILED (before fix) - RP3 IN, possible-duplicate OUT, valid OUT: IN correction_needed, the duplicate stays for review, nothing counted
+FAILED (before fix) - RP4 IN, correction_needed OUT, valid OUT: IN correction_needed, nothing counted
+ok - RP5 IN, OUT without direction, valid OUT: IN correction_needed, the 12:00 punch correction_needed (no_direction), nothing counted
+ok - RP6 IN, a later IN, OUT: nothing is paired across the second IN; all three to HR, nothing counted
+FAILED (before fix) - RP6 IN, a flagged re-press 2 min later, OUT: a flagged press is not treated as a harmless re-press; IN correction_needed
+ok - RP7 a punch HR already dismissed / confirmed as a duplicate does not block the pair: 09:00–17:00 counted, the reviewed punch keeps its state
+ok - RP8 a punch arriving after the pair was counted (flagged OUT / later IN / re-press): flagged / correction_needed (out_of_order) / extra; the counted rows keep their ids and times
+ok - RP8 HR accepts the late flagged 12:00 OUT
+ok - RP8 the accepted 12:00 OUT inside the counted pair is out of order: correction_needed, the 09:00–17:00 interval is not cut or extended
+ok - RP9 projecting RP1–RP8 twice more changes no row, state, version or audit
+FAILED (before fix) - RP10 the held OUT is looked at again: the IN stays correction_needed for HR, no row is written, no open session
+```
+After the fix (from `npm run test:db`):
+```
+ok - RP1 IN, flagged OUT, valid OUT: the flagged OUT is not jumped over; IN correction_needed, the flagged OUT stays flagged, nothing counted, no open session
+ok - RP2 IN, held OUT, valid OUT: IN correction_needed, the held OUT stays held with its reason, nothing counted
+ok - RP3 IN, possible-duplicate OUT, valid OUT: IN correction_needed, the duplicate stays for review, nothing counted
+ok - RP4 IN, correction_needed OUT, valid OUT: IN correction_needed, nothing counted
+ok - RP5 IN, OUT without direction, valid OUT: IN correction_needed, the 12:00 punch correction_needed (no_direction), nothing counted
+ok - RP6 IN, a later IN, OUT: nothing is paired across the second IN; all three to HR, nothing counted
+ok - RP6 IN, a flagged re-press 2 min later, OUT: a flagged press is not treated as a harmless re-press; IN correction_needed
+ok - RP7 a punch HR already dismissed / confirmed as a duplicate does not block the pair: 09:00–17:00 counted, the reviewed punch keeps its state
+ok - RP8 a punch arriving after the pair was counted (flagged OUT / later IN / re-press): flagged / correction_needed (out_of_order) / extra; the counted rows keep their ids and times
+ok - RP8 HR accepts the late flagged 12:00 OUT
+ok - RP8 the accepted 12:00 OUT inside the counted pair is out of order: correction_needed, the 09:00–17:00 interval is not cut or extended
+ok - RP9 projecting RP1–RP8 twice more changes no row, state, version or audit
+ok - RP10 the held OUT is looked at again: the IN stays correction_needed for HR, no row is written, no open session
+```
+RP8 covers "the intervening punch arrives after the pair was counted": the counted rows keep their ids and times, the
+late punch is flagged / correction_needed (out_of_order) / extra, and an HR-accepted late 12:00 OUT inside the pair is
+correction_needed — the interval is never cut or stretched. RP10: when the held punch is looked at again, the IN stays
+with HR; it is never paired on its own afterwards. Every RP case checks: rows match raw punches, nothing left stored,
+session off, no row for the blocked people.
+
+Concurrency, new proof 9c (a flagged 12:00 punch ingested while the pair is decided, both orders):
+```
+   [ingest_uncommitted] counted: in:09:00,out:17:00; punches: 09:00=projected,12:00=flagged,17:00=projected; invariant violations 0; rerun changed: no
+ok - 9c. flagged punch between IN and OUT ingested during the pair decision (ingest_uncommitted): pair to HR if the punch was visible, otherwise counted with the punch still flagged; never half a pair; rerun stable
+   [projection_first] counted: in:09:00,out:17:00; punches: 09:00=projected,12:00=flagged,17:00=projected; invariant violations 0; rerun changed: no
+ok - 9c. flagged punch between IN and OUT ingested during the pair decision (projection_first): pair to HR if the punch was visible, otherwise counted with the punch still flagged; never half a pair; rerun stable
+```
+Ingest does not take lock 7, so an uncommitted punch is not visible to the projection in either order; the pair is
+counted and the punch, arriving inside a counted pair, stays flagged (the RP8 rules then apply). A punch committed
+before the run is the RP1 case.
+
+### 12.4 Results after the fix (all executed 21 Nov 2026, exit status 0)
+
+| Suite | Result |
+|---|---|
+| `biometric_projection_test.sql` | **239/239** (226 + 13 RP) |
+| Full database run (`npm run test:db`) | **872** checks (633 + 239) |
+| `projection_proof.sh` | **17/17** (15 + 9c ×2) |
+| `lock_proof.sh` / `gateway_proof.sh` / `preflight_test.sh` / `delete_company_test.sh` | 21, 6, 5, 6 — all pass |
+| HTTP projection / gateway | 17/17, 18/18 (demo rebuilt with this 0012) |
+| Browser regression | 29/29 |
+| `npm run check` / `npm run build` | 53/53; build ok (`src/` unchanged) |
+
+Write budgets: B1–B10, Q4 and the R budget checks pass unchanged; the wider search reads rows but writes nothing.
+
+### 12.5 Decision taken, open to the owner
+
+Passing over **HR-resolved** punches (dismissed, rejected, HR-decided extra/reconciled) is a choice: HR has already
+said they are not attendance, so treating them as blocking would send clean days to HR for no new reason (RP7). If the
+owner prefers every punch to block, it is a one-line change (`continue` → `exit`) and RP7 flips.
+
+### 12.6 Risks
+
+- More delayed INs go to HR: any unresolved punch after the IN now blocks the pair. This is intended (no guessing).
+- Once blocked, the IN is not re-paired automatically when the blocking punch is resolved later (RP10); HR decides it.
+- §11.6 and §9 still apply.

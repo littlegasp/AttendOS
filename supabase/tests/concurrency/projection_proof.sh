@@ -300,6 +300,29 @@ for ORDER in approval_first projection_first; do
   [ "$A" = true ] && [ "$DAY" = "in:correction,out:correction" ] && [ "$I" = 0 ] && [ "$S1" = "$S2" ] && ok "9b. delayed pair vs correction approval ($ORDER): only the correction's in/out count, both punches are accounted for ($BIO, then after_correction), yesterday is closed, a rerun changes nothing" || bad "9b. $ORDER a=$A day=$DAY bio=$BIO inv=$I"
 done
 
+# 9c. a flagged punch between the IN and the OUT is ingested while the pair is being decided (both orders). Committed first: the pair search
+#     reads it in time order, so the IN goes to HR (test RP1). Still uncommitted (both cases here; ingest does not take lock 7): the pair is counted, and the punch, arriving inside a counted pair,
+#     stays flagged. Either way nothing is stretched, nothing is lost, yesterday is not left open, a rerun changes nothing.
+for ORDER in ingest_uncommitted projection_first; do
+  E=$(q $DB "select proof.fresh_person('r9c$ORDER')"); T=$(echo r9c$ORDER | tr a-z A-Z)
+  q $DB "select proof.punch('PDV001', '$T', proof.at(1, '09:00'), 'authenticated', 'in'); select proof.punch('PDV002', '$T', proof.at(1, '17:00'), 'authenticated', 'out');" > /dev/null
+  if [ $ORDER = ingest_uncommitted ]; then
+    ( sess - "begin; select proof.punch('PDV001', '$T', proof.at(1, '12:00'), 'unauthenticated_lan', 'out'); select pg_sleep(0.8); commit;" /tmp/p9e.txt ) &
+    sleep 0.3; sess - "select biometric_project_day('$E', local_today(proof.c()) - 1)" /tmp/p9f.txt; wait
+  else
+    ( sess - "begin; select biometric_project_day('$E', local_today(proof.c()) - 1); select pg_sleep(0.8); commit;" /tmp/p9f.txt ) &
+    sleep 0.3; sess - "select proof.punch('PDV001', '$T', proof.at(1, '12:00'), 'unauthenticated_lan', 'out')" /tmp/p9e.txt; wait
+  fi
+  q $DB "select biometric_project_day('$E', local_today(proof.c()) - 1)" > /dev/null
+  DAY=$(q $DB "select string_agg(kind || ':' || to_char(at at time zone (select timezone from companies where id = proof.c()), 'HH24:MI'), ',' order by at) from attendance_events where employee_id = '$E' and superseded_by is null")
+  BIO=$(q $DB "select string_agg(to_char(r.punch_at at time zone (select timezone from companies where id = proof.c()), 'HH24:MI') || '=' || s.status, ',' order by r.punch_at) from biometric_event_state s join biometric_raw_events r on r.id = s.raw_event_id where s.employee_id = '$E'")
+  I=$(pairinv $E); S1=$(snap $E); q $DB "select biometric_project_day('$E', local_today(proof.c()) - 1)" > /dev/null; S2=$(snap $E)
+  echo "   [$ORDER] counted: ${DAY:-none}; punches: $BIO; invariant violations $I; rerun changed: $([ "$S1" = "$S2" ] && echo no || echo yes)"
+  case "$DAY|$BIO" in
+    "|09:00=correction_needed,12:00=flagged,17:00=correction_needed"|"in:09:00,out:17:00|09:00=projected,12:00=flagged,17:00=projected") OKC=1;; *) OKC=0;; esac
+  [ $OKC = 1 ] && [ "$I" = 0 ] && [ "$S1" = "$S2" ] && ok "9c. flagged punch between IN and OUT ingested during the pair decision ($ORDER): pair to HR if the punch was visible, otherwise counted with the punch still flagged; never half a pair; rerun stable" || bad "9c. $ORDER day=$DAY bio=$BIO inv=$I"
+done
+
 for d in proj_race_1 proj_race_2 proj_race_3 proj_race_4 proj_race_5 proj_race_6 proj_race_7 proj_race_8 proj_race_9; do dropdb --if-exists $d 2>/dev/null; done
 echo "$PASS passed, $FAIL failed"
 [ $FAIL = 0 ]

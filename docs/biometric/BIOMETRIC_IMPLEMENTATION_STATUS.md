@@ -19,7 +19,7 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 |---|---|---|---|---|---|
 | B2 screens (demonstration data) | Yes | Yes (52 app, 101 + 56 sign-off browser, 360 DB, 29 regression) | Yes — UI only, mock state | No | No |
 | Migrations 0010, 0011 (database, gateway) | Yes | Yes (633 DB, 21 + 6 concurrency, 18 HTTP) | Mock agent only | No | No |
-| Projection 0012 | Yes (database; final-review fix 21 Nov 2026) | Yes (226 SQL + 15 concurrency + 17 HTTP; full run 859) | Mock agent / direct inserts only | No | No |
+| Projection 0012 | Yes (database; final-review and pair-selection fixes 21 Nov 2026) | Yes (239 SQL + 17 concurrency + 17 HTTP; full run 872) | Mock agent / direct inserts only | No | No |
 | Projection UI (labels, provisional display, CSV Source) | No | No | No | No | No |
 | Agent, adapters | No | No | No | No | No |
 

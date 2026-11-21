@@ -324,5 +324,8 @@ checks. Not run on any hosted project; pg_cron not installed; projection off for
 Report: docs/biometric/BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md. **Final review (21 Nov 2026):** a delayed device-mode
 IN on a finished day is now counted only together with the OUT that closes it (decided as one unit by the OUT's own
 rules), otherwise it is correction_needed; re-presses inside a counted pair stay extra on every run. New test group R
-(16), proofs 9a/9b; full database run 859 checks; report §11. Awaiting owner review.
+(16), proofs 9a/9b; report §11. **Pair-selection review (21 Nov 2026):** the punch that closes a delayed IN is
+looked for in raw time order across every state, so a flagged/held/duplicate/correction_needed punch in between is never
+jumped over (the IN goes to HR); punches HR dismissed or confirmed as duplicates are passed over. Test group RP (13),
+proof 9c; full database run 872 checks; report §12. Awaiting owner review.
 

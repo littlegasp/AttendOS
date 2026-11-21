@@ -536,7 +536,7 @@ begin
       -- Session safety (HR acceptance does NOT bypass this). An IN on a finished day that would become the person's newest
       -- event may only be counted together with the OUT that closes it. The pair is decided here, as one unit, by the same
       -- rules the OUT would meet on its own after the IN is counted; if the OUT would not be counted (reconciled with an app
-      -- check-out, a double press, out of order, no direction, held/flagged/duplicate so not a candidate, another IN in
+      -- check-out, a double press, out of order, no direction, held/flagged/duplicate/correction_needed, another IN in
       -- between, nothing at all), the IN is correction_needed and the OUT is left to its own rules. Re-presses of the same
       -- IN between the two (within the reconciliation window) are recorded as extra in the same step. (B3.4 final review:
       -- the first fix only looked at the next punch's direction, so an OUT that then reconciled left the IN open.)
@@ -550,12 +550,22 @@ begin
                       and r3.punch_at > coalesce((select max(at) from public.attendance_events where employee_id = p_emp and superseded_by is null), '-infinity')) then
           n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day')::int; continue;
         end if;
-        for c2 in select s2.raw_event_id id, s2.status, r2.punch_at, r2.direction
+        -- The raw punches after the IN are read in time order in EVERY state, not only the projection candidates, so a
+        -- punch that is flagged, held, a possible duplicate, waiting for a correction, without direction, on another work
+        -- date, or already counted is never jumped over (pair-selection review). Only punches HR has already resolved as
+        -- not attendance (dismissed, confirmed duplicate = rejected, an extra/reconciled role HR decided) are passed over.
+        for c2 in select s2.raw_event_id id, s2.status, s2.decided, s2.work_date, s2.projected_event_id, r2.punch_at, r2.direction
                     from public.biometric_event_state s2 join public.biometric_raw_events r2 on r2.id = s2.raw_event_id
-                   where s2.employee_id = p_emp and s2.work_date = p_day and r2.punch_at <= now() and s2.projected_event_id is null
-                     and (s2.status = 'stored' or (s2.status in ('extra', 'reconciled') and not s2.decided))
+                   where s2.employee_id = p_emp and s2.work_date between p_day - 1 and p_day + 1 and r2.punch_at <= now()
                      and (r2.punch_at, s2.raw_event_id) > (c.punch_at, c.id) and not (s2.raw_event_id = any (done))
                    order by r2.punch_at, s2.raw_event_id loop
+          if c2.status in ('dismissed', 'rejected') or (c2.status in ('extra', 'reconciled') and c2.decided) then
+            continue;                                                 -- resolved by HR as not attendance
+          end if;
+          if c2.work_date <> p_day or c2.projected_event_id is not null
+             or not (c2.status = 'stored' or (c2.status in ('extra', 'reconciled') and not c2.decided)) then
+            exit;                                                     -- the next relevant punch is not one this step may use
+          end if;
           if c2.direction = 'in' and c2.punch_at - c.punch_at <= make_interval(mins => st.reconcile_min) then
             pair_skip := pair_skip || c2.id; continue;                -- a re-press of this IN (double press or repeat)
           end if;
@@ -568,7 +578,7 @@ begin
                                and e.at > c.punch_at and e.at <= c2.punch_at) then
             pair_out := c2.id; pair_out_at := c2.punch_at;
           end if;
-          exit;                                                       -- only the first real punch after the IN can close it
+          exit;                                                       -- only the first relevant punch after the IN can close it
         end loop;
         if pair_out is null then
           n := n + public.biometric_set_role(c.id, 'correction_needed', p_flag => 'would_open_closed_day')::int; continue;

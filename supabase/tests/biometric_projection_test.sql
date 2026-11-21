@@ -1062,15 +1062,15 @@ select pg_temp.expect(not exists (select 1 from information_schema.columns where
 
 
 -- ================================================================ R — delayed device-mode IN + OUT on a closed day (B3.4 final review)
--- People r01…r20 (codes R01…R20); device-direction devices 'dv' (plant) and 'dv2' (annex); every day is yesterday (closed).
+-- People r01…r40 (codes R01…R40); device-direction devices 'dv' (plant) and 'dv2' (annex); every day is yesterday (closed).
 insert into auth.users (id, email, email_confirmed_at)
-  select ('00000000-0000-0000-0000-0000000003' || lpad(g::text, 2, '0'))::uuid, 'r' || lpad(g::text, 2, '0') || '@proj.co', now() from generate_series(1, 20) g;
+  select ('00000000-0000-0000-0000-0000000003' || lpad(g::text, 2, '0'))::uuid, 'r' || lpad(g::text, 2, '0') || '@proj.co', now() from generate_series(1, 40) g;
 insert into employees (company_id, full_name, email, role, user_id, home_location_id, joining_date)
   select current_setting('p.c')::uuid, 'Rio ' || lpad(g::text, 2, '0'), 'r' || lpad(g::text, 2, '0') || '@proj.co', 'employee',
-         ('00000000-0000-0000-0000-0000000003' || lpad(g::text, 2, '0'))::uuid, current_setting('p.loc')::uuid, current_date - 60 from generate_series(1, 20) g;
+         ('00000000-0000-0000-0000-0000000003' || lpad(g::text, 2, '0'))::uuid, current_setting('p.loc')::uuid, current_date - 60 from generate_series(1, 40) g;
 insert into biometric_employee_mappings (company_id, employee_id, employee_device_code, valid_from)
   select current_setting('p.c')::uuid, (select id from employees where email = 'r' || lpad(g::text, 2, '0') || '@proj.co'), 'R' || lpad(g::text, 2, '0'), now() - interval '60 days'
-    from generate_series(1, 20) g;
+    from generate_series(1, 40) g;
 create function pg_temp.r(n int) returns uuid language sql as $$ select id from public.employees where email = 'r' || lpad(n::text, 2, '0') || '@proj.co' $$;
 -- one device punch for person rNN at local time t yesterday (or day d); o may force a status, auth, or omit the direction
 create function pg_temp.rp(dev text, n int, t time, dir text, o jsonb default '{}', d int default 1) returns bigint language sql as $$
@@ -1205,5 +1205,97 @@ select set_config('r.b9', biometric_project_day(pg_temp.r(14), pg_temp.pd(1), 9)
 select pg_temp.expect((current_setting('r.b9')::jsonb ->> 'written')::int <= 9 and pg_temp.revs(14) = 'in 09:00 B, out 17:00 B' and pg_temp.rinv(14)
   and (select count(*) from biometric_event_state where employee_id = pg_temp.r(14) and status = 'extra') = 2,
   'R budget: limit 9 writes the pair and both skipped presses in one call (6 writes)');
+
+-- ================================================================ RP — the punch after a delayed IN is judged in raw time order (pair-selection review)
+-- Every day is yesterday (closed). IN 09:00 (plant), an intervening punch at 12:00, a valid OUT 17:00 (annex). Before this review the pair
+-- search read only projection candidates, so an intervening punch in another state (flagged, held, possible duplicate, correction_needed)
+-- was skipped and the IN was paired with 17:00. Now the first relevant raw punch after the IN decides; if it cannot close the IN, the IN is
+-- correction_needed and every punch keeps its own state. Punches HR has already resolved as not attendance (dismissed, confirmed duplicate =
+-- rejected) are not attendance and do not block a pair.
+create function pg_temp.rp3(n int, mid_t time, mid_dir text, mid_o jsonb default '{}') returns bigint language plpgsql as $$
+declare m bigint;
+begin
+  perform set_config('rp.i' || n, pg_temp.rp('dv', n, '09:00', 'in')::text, false);
+  m := pg_temp.rp('dv', n, mid_t, mid_dir, mid_o); perform set_config('rp.m' || n, m::text, false);
+  perform set_config('rp.o' || n, pg_temp.rp('dv2', n, '17:00', 'out')::text, false);
+  return m;
+end $$;
+-- rinv for these people: punches the gateway already left flagged / held / possible duplicate / reviewed are never visited by projection,
+-- so their processed_at stays empty by design; every punch projection DID decide must have it set, and nothing may be left stored
+create function pg_temp.rpinv(n int) returns boolean language sql as $$
+  select not exists (select 1 from public.attendance_events e join public.biometric_raw_events r on r.id = e.biometric_event_id
+                       join public.biometric_event_state s on s.raw_event_id = r.id
+                      where e.employee_id = pg_temp.r(n) and (e.at <> r.punch_at or s.employee_id <> e.employee_id or s.work_date <> e.work_date
+                            or e.work_date <> pg_temp.pd(1) or e.source <> 'biometric' or e.device_id <> r.device_id or s.status <> 'projected' or s.projected_event_id <> e.id))
+     and not exists (select 1 from public.biometric_event_state s where s.employee_id = pg_temp.r(n) and s.status = 'projected'
+                       and not exists (select 1 from public.attendance_events e where e.id = s.projected_event_id and e.biometric_event_id = s.raw_event_id))
+     and not exists (select 1 from public.biometric_event_state s where s.employee_id = pg_temp.r(n)
+                      and (s.status = 'stored' or (s.processed_at is null and s.status in ('projected', 'correction_needed', 'extra', 'reconciled')
+                           and not (s.status = 'correction_needed' and s.raw_event_id::text = current_setting('rp.m' || n, true)))))
+$$;
+create function pg_temp.rps(n int, k text) returns text language sql as $$ select pg_temp.st(current_setting('rp.' || k || n)::bigint) $$;
+create function pg_temp.rpblocked(n int, mid_state text) returns boolean language sql as $$
+  select pg_temp.revs(n) = '' and pg_temp.rps(n, 'i') = 'correction_needed' and 'would_open_closed_day' = any (pg_temp.fl(current_setting('rp.i' || n)::bigint))
+     and pg_temp.rps(n, 'm') = mid_state and pg_temp.rps(n, 'o') = 'correction_needed' and pg_temp.rstate(n) = 'off' and pg_temp.rpinv(n)
+     and not exists (select 1 from attendance_events where employee_id = pg_temp.r(n)) $$;
+select pg_temp.rp3(21, '12:00', 'out', '{"auth": "unauthenticated_lan"}');            -- 1 flagged OUT
+select pg_temp.rp3(22, '12:00', 'out');                                                 -- 2 held OUT (not due yet)
+update biometric_event_state set status = 'held', hold_reason = 'device_without_office', held_since = now(), next_check_at = now() + interval '1 hour'
+ where raw_event_id = current_setting('rp.m22')::bigint;
+select pg_temp.rp3(23, '12:00', 'out', '{"status": "possible_duplicate"}');            -- 3 possible duplicate OUT
+select pg_temp.rp3(24, '12:00', 'out', '{"status": "correction_needed"}');             -- 4 OUT already waiting for a correction
+select pg_temp.rp3(25, '12:00', null);                                                  -- 5 OUT without direction (stored)
+select pg_temp.rp3(26, '12:00', 'in');                                                  -- 6a a later IN (stored)
+select pg_temp.rp3(27, '09:02', 'in', '{"auth": "unauthenticated_lan"}');              -- 6b a flagged re-press of the IN inside the window
+select pg_temp.rp3(28, '12:00', 'out', '{"status": "dismissed"}');                     -- 7a dismissed by HR
+select pg_temp.rp3(29, '12:00', 'out', '{"status": "rejected"}');                      -- 7b confirmed duplicate (rejected) by HR
+select pg_temp.rproj(n) from generate_series(21, 29) n;
+select pg_temp.expect(pg_temp.rpblocked(21, 'flagged'), 'RP1 IN, flagged OUT, valid OUT: the flagged OUT is not jumped over; IN correction_needed, the flagged OUT stays flagged, nothing counted, no open session');
+select pg_temp.expect(pg_temp.rpblocked(22, 'held') and (pg_temp.sx(current_setting('rp.m22')::bigint)).hold_reason = 'device_without_office',
+  'RP2 IN, held OUT, valid OUT: IN correction_needed, the held OUT stays held with its reason, nothing counted');
+select pg_temp.expect(pg_temp.rpblocked(23, 'possible_duplicate'), 'RP3 IN, possible-duplicate OUT, valid OUT: IN correction_needed, the duplicate stays for review, nothing counted');
+select pg_temp.expect(pg_temp.rpblocked(24, 'correction_needed'), 'RP4 IN, correction_needed OUT, valid OUT: IN correction_needed, nothing counted');
+select pg_temp.expect(pg_temp.rpblocked(25, 'correction_needed') and 'no_direction' = any (pg_temp.fl(current_setting('rp.m25')::bigint)),
+  'RP5 IN, OUT without direction, valid OUT: IN correction_needed, the 12:00 punch correction_needed (no_direction), nothing counted');
+select pg_temp.expect(pg_temp.rpblocked(26, 'correction_needed'), 'RP6 IN, a later IN, OUT: nothing is paired across the second IN; all three to HR, nothing counted');
+select pg_temp.expect(pg_temp.rpblocked(27, 'flagged'), 'RP6 IN, a flagged re-press 2 min later, OUT: a flagged press is not treated as a harmless re-press; IN correction_needed');
+select pg_temp.expect(pg_temp.revs(28) = 'in 09:00 B, out 17:00 B' and pg_temp.rps(28, 'm') = 'dismissed' and pg_temp.rstate(28) = 'off' and pg_temp.rpinv(28)
+  and pg_temp.revs(29) = 'in 09:00 B, out 17:00 B' and pg_temp.rps(29, 'm') = 'rejected' and pg_temp.rstate(29) = 'off' and pg_temp.rpinv(29),
+  'RP7 a punch HR already dismissed / confirmed as a duplicate does not block the pair: 09:00–17:00 counted, the reviewed punch keeps its state');
+-- 8 the intervening punch arrives only AFTER the pair was counted: it never stretches or splits the counted interval
+select set_config('rp.i30', pg_temp.rp('dv', 30, '09:00', 'in')::text, false); select set_config('rp.o30', pg_temp.rp('dv2', 30, '17:00', 'out')::text, false);
+select set_config('rp.i31', pg_temp.rp('dv', 31, '09:00', 'in')::text, false); select set_config('rp.o31', pg_temp.rp('dv2', 31, '17:00', 'out')::text, false);
+select set_config('rp.i32', pg_temp.rp('dv', 32, '09:00', 'in')::text, false); select set_config('rp.o32', pg_temp.rp('dv2', 32, '17:00', 'out')::text, false);
+select pg_temp.rproj(n) from generate_series(30, 32) n;
+select set_config('rp.ids', (select string_agg(id::text, ',' order by id) from attendance_events where employee_id in (pg_temp.r(30), pg_temp.r(31), pg_temp.r(32))), false);
+select set_config('rp.m30', pg_temp.rp('dv', 30, '12:00', 'out', '{"auth": "unauthenticated_lan"}')::text, false);
+select set_config('rp.m31', pg_temp.rp('dv', 31, '12:00', 'in')::text, false);
+select set_config('rp.m32', pg_temp.rp('dv', 32, '09:03', 'in')::text, false);
+select pg_temp.rproj(n) from generate_series(30, 32) n;
+select pg_temp.expect(pg_temp.revs(30) = 'in 09:00 B, out 17:00 B' and pg_temp.rps(30, 'm') = 'flagged'
+  and pg_temp.revs(31) = 'in 09:00 B, out 17:00 B' and pg_temp.rps(31, 'm') = 'correction_needed' and 'out_of_order' = any (pg_temp.fl(current_setting('rp.m31')::bigint))
+  and pg_temp.revs(32) = 'in 09:00 B, out 17:00 B' and pg_temp.rps(32, 'm') = 'extra'
+  and (select string_agg(id::text, ',' order by id) from attendance_events where employee_id in (pg_temp.r(30), pg_temp.r(31), pg_temp.r(32))) = current_setting('rp.ids')
+  and pg_temp.rstate(30) = 'off' and pg_temp.rstate(31) = 'off' and pg_temp.rstate(32) = 'off' and pg_temp.rpinv(30) and pg_temp.rpinv(31) and pg_temp.rpinv(32),
+  'RP8 a punch arriving after the pair was counted (flagged OUT / later IN / re-press): flagged / correction_needed (out_of_order) / extra; the counted rows keep their ids and times');
+select pg_temp.pact('hr@proj.co');
+select pg_temp.expect(pg_temp.review(current_setting('rp.m30')::bigint, 'accept_time') ->> 'status' = 'stored', 'RP8 HR accepts the late flagged 12:00 OUT');
+select pg_temp.pact('owner');
+select pg_temp.rproj(30);
+select pg_temp.expect(pg_temp.revs(30) = 'in 09:00 B, out 17:00 B' and pg_temp.rps(30, 'm') = 'correction_needed' and pg_temp.rstate(30) = 'off' and pg_temp.rpinv(30),
+  'RP8 the accepted 12:00 OUT inside the counted pair is out of order: correction_needed, the 09:00–17:00 interval is not cut or extended');
+-- 9 repeated runs change nothing
+select set_config('rp.snap', (select md5(string_agg(to_jsonb(e)::text, '|' order by id)) from attendance_events e where employee_id in (select pg_temp.r(n) from generate_series(21, 32) n))
+  || (select md5(string_agg(to_jsonb(s)::text, '|' order by raw_event_id)) from biometric_event_state s where employee_id in (select pg_temp.r(n) from generate_series(21, 32) n))
+  || (select count(*) from audit_log)::text, false);
+select pg_temp.rproj(n) from generate_series(21, 32) n; select pg_temp.rproj(n) from generate_series(21, 32) n;
+select pg_temp.expect((select md5(string_agg(to_jsonb(e)::text, '|' order by id)) from attendance_events e where employee_id in (select pg_temp.r(n) from generate_series(21, 32) n))
+  || (select md5(string_agg(to_jsonb(s)::text, '|' order by raw_event_id)) from biometric_event_state s where employee_id in (select pg_temp.r(n) from generate_series(21, 32) n))
+  || (select count(*) from audit_log)::text = current_setting('rp.snap'), 'RP9 projecting RP1–RP8 twice more changes no row, state, version or audit');
+-- 10 when the blocking punch is resolved later, the IN still waits for HR (it is never paired on its own afterwards), nothing is stretched
+update biometric_event_state set next_check_at = now() - interval '1 second' where raw_event_id = current_setting('rp.m22')::bigint;
+select pg_temp.rproj(22);
+select pg_temp.expect(pg_temp.revs(22) = '' and pg_temp.rps(22, 'i') = 'correction_needed' and pg_temp.rstate(22) = 'off' and pg_temp.rpinv(22),
+  'RP10 the held OUT is looked at again: the IN stays correction_needed for HR, no row is written, no open session');
 
 \echo ALL BIOMETRIC PROJECTION TESTS PASSED
