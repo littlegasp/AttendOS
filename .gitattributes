@@ -1,0 +1,2 @@
+# DAT fixtures must keep their exact bytes (CRLF, padding, invalid encodings)
+tests/fixtures/dat/*.dat binary
