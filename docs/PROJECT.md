@@ -356,3 +356,12 @@ server software; event normalization (user codes stay text, original time never 
 conflict check: the payload holds only device-produced values (`essl/1`), never agent metadata; offline/recovery
 matrix; mock eSSL test plan T1–T15; purchase checklist; milestones M0–M12; decisions E1–E12. No code or migration.
 
+**B5 revision 3 — X2008 + offline DAT import (21 Nov 2026, design only):** reference machine eSSL X2008 recorded from
+its own info screen (ZMM210_TFT, firmware 8.0.4.2-20180530, Push Service 2.0.34; serial/MAC withheld); every
+communication capability marked unverified; third-party X2008 evidence is for other firmware. New third path
+`essl.dat_import` (USB export → original .dat → Admin upload → import staging only; no raw events, projection or
+register rows; original bytes, row order and raw strings kept; duplicates labelled, never removed). DAT format pending
+inspection of an original file (none supplied yet). Trust limits per path; roadmap now M1 DAT format → M2 DAT import
+(migration 0013, separate approval) → agent milestones; decisions R1–R10.
+docs/biometric/BIOMETRIC_B5_REV3_DESIGN.md. No code or migration.
+

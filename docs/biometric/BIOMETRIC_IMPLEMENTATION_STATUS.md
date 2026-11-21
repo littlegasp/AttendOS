@@ -10,8 +10,9 @@ Labels: **Implemented · Locally tested · Mock tested · Tested with real hardw
 | B3 Database + gateway | 0010 core tables, 0011 `biometric_ingest`, heartbeat, keys, normalisation, idempotency, errors | **Implemented and locally tested; approved for local development** (BIOMETRIC_B3_1_DB_DESIGN.md r5.1). Not hosted. |
 | B3.4 Attendance projection (0012) | Projection under the punch lock, slots, provisional out, gate, holds, correction wrapper, `day_events`, labels | **Implemented and locally tested** (migration 0012; BIOMETRIC_B3_4_IMPLEMENTATION_REPORT.md). Not hosted; pg_cron not installed; UI items not built; projection off for real companies. |
 | B4 Application UI | Source labels, timeline, provisional out, CSV Source, live device screens | **Implemented and locally tested** (BIOMETRIC_B4_UI_REPORT.md). Not deployed. |
-| B5 Sync Agent | Windows Service, encrypted queue, uploader, heartbeat, mock adapters, push receiver, installer | **Design written — awaiting owner review** (revision 1: BIOMETRIC_B5_SYNC_AGENT_DESIGN.md; revision 2, eSSL first: BIOMETRIC_B5_ESSL_FIRST_DESIGN.md, milestones M0–M12). Not yet implemented. |
-| B5 M8–M10 First real adapter + pilot | eSSL (owner decision 21 Nov 2026); model and firmware not yet chosen (E1) | Not yet implemented — needs hardware |
+| B5 Sync Agent | Windows Service, encrypted queue, uploader, heartbeat, mock adapters, push receiver, installer | **Design written — awaiting owner review** (revision 1: BIOMETRIC_B5_SYNC_AGENT_DESIGN.md; revision 2, eSSL first: BIOMETRIC_B5_ESSL_FIRST_DESIGN.md; revision 3, X2008 + DAT import: BIOMETRIC_B5_REV3_DESIGN.md, milestones M0–M13). Not yet implemented. |
+| B5 M1–M2 Offline DAT import (`essl.dat_import`) | X2008 USB export → import staging; no projection | Designed (rev 3). DAT format pending inspection of an original file. Not yet implemented. |
+| B5 M10–M13 First network adapter + pilot | eSSL X2008 reference machine (firmware 8.0.4.2-20180530) | Not yet implemented — every communication capability unverified |
 | B6 Register drawer and review processing UI | Screens on top of the 0012 projection | Not yet implemented |
 | B7 Other manufacturers | eSSL / Matrix / others | Not yet implemented |
 | B8 Readiness review | Security, isolation, reliability, retention, performance, hosting | Not yet implemented |

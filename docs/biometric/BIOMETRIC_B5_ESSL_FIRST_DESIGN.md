@@ -3,6 +3,8 @@
 Status: **DESIGN ONLY — for owner review.** No code, migration, hosted SQL, eSSL software install or device
 connection. Date 21 Nov 2026. Branch `feature/biometric-b1` (design documents only).
 
+**Revision 3 (X2008 + DAT import): BIOMETRIC_B5_REV3_DESIGN.md takes precedence where the two differ.**
+
 **Owner decision recorded:** eSSL is the first hardware manufacturer. Model and firmware are not known yet.
 
 This revision builds on BIOMETRIC_B5_SYNC_AGENT_DESIGN.md (revision 1, commit `a1b4773`). Revision 1 still holds
