@@ -391,3 +391,13 @@ For code 10 the report's three InTimes match DAT lines 24, 95 and 150 to the min
 inferring eSSL's reason: raw record count is not an IN/OUT rule; pairing stays outside the DAT parser.
 docs/biometric/BIOMETRIC_HR_REPORT_CORRELATION.md (evidence E1–E5 needed, questions Q1–Q9).
 
+**B5 DAT import Stages 1–2 (23 Nov 2026, local implementation, awaiting owner review):** migration 0013 (local only)
+adds the versioned reader `essl.x2008.attlog/1` and import staging: resumable hashed upload, byte-exact file kept,
+every line kept as a row in file order (raw text, all six fields as text, original timestamp string, instant in the
+declared zone; malformed, blank and duplicate lines kept with a status), five duplicate labels (no row removed),
+mapping preview computed on read (device first, then company; half-open validity). Admin-only tab **Biometric → File
+import** (`importBiometricFiles`). Never writes raw events, attendance or register rows, never projects, never infers
+IN/OUT or reads fields 3–6. Real export (151 lines): 151 ok/new, 17 codes; code 10 → WR198 on lines 24, 95, 150, 151.
+Real file never committed (gitignore + hash guard test). Tests: check 81+1 skipped, test:db 990 ok, DAT e2e 48/48.
+90-day purge not built (needs a scheduler). Open: mapping start date for 10 (assumed 2026-11-01 locally), file name
+holds the device serial. docs/biometric/BIOMETRIC_B5_DAT_IMPORT_REPORT.md.

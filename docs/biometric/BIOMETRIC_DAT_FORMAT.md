@@ -24,7 +24,7 @@ or other devices.
 | Supplied file name | `<device-serial>_attlog (1)(1).dat` — **the prefix is redacted**: it has the form of a device serial (ZKTeco-family exports are named `<serial>_attlog.dat`), and serials are kept out of the repository. The ` (1)(1)` suffix suggests the file was saved or copied twice after export (see Q8) |
 | Inspected by | owner, directly, 21 Nov 2026 |
 | Size | 6,191 bytes [OBSERVED] |
-| SHA-256 | **not yet recorded.** The file was inspected outside this design session and hasn't been made available here, so the hash couldn't be computed. The owner records it from the original (`certutil -hashfile <file> SHA256` on Windows), and it is entered here — the hash only, never the content (Q9) |
+| SHA-256 | `6f0115361bbb2f51c92c3424b3edf14ea07fd68643dbfc96670a3d7122192476` — computed from the original bytes uploaded by the owner on 23 Nov 2026 ("directly from the USB drive"); recomputed by the database on import (`R0`, `R3`) |
 | Where the file is kept | owner's own storage. **Not in GitHub and not in test fixtures** [RULE] |
 
 ---
@@ -49,7 +49,16 @@ or other devices.
 | Repeated (code, timestamp) pairs | none |
 | Distinct codes | 17 |
 
-**[DERIVED]** 6,191 bytes ÷ 151 lines = exactly **41 bytes per line**. That equals the example line:
+**[VERIFIED 23 Nov 2026 from the original bytes]** every point above, plus:
+- every line is exactly 41 bytes (39 + CRLF), so fixed width is confirmed for this file;
+- all bytes are ASCII (no byte above 127, no NUL); 755 TABs = 151 × 5;
+- all 17 codes are digits, at most 2 characters long, with no leading zero. The `10` / `010` / `0010` distinction is
+  therefore exercised only by synthetic fixtures;
+- field 3 is `1`, field 4 `255` and field 6 `0` on every line; field 5 is `1` on 131 lines and `3` on 20. Meanings
+  stay **[UNKNOWN]**;
+- the two 21 Nov code-10 records (lines 150, 151) have identical fields 3–6.
+
+**[DERIVED, now confirmed]** 6,191 bytes ÷ 151 lines = exactly **41 bytes per line**. That equals the example line:
 9 (field 1) + 1 + 19 (timestamp) + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 1 (fields 3–6 and tabs) + 2 (CRLF). This is
 *consistent with* every line having the same widths as the example. It doesn't prove it: other combinations could
 produce the same total. It is confirmed only when the parser records each line's length on the real file (§8.2).
@@ -240,7 +249,7 @@ Fixtures are in `tests/fixtures/dat/` (all synthetic; see its README for bytes, 
 | P15 | Same code and time, different raw fields | f11 | line 14 `same_code_time_other_fields` → 13; both kept and shown together |
 | P16 | Chronological and out-of-order records | f01, f12 | f01: no `out_of_order`; f12: lines 12 and 21 noted `out_of_order`; file order kept |
 | P17 | Unknown field values | f13 | every value (incl. empty, `x`, `-1`, `01`, `00`) stored exactly; nothing derived from them |
-| P18 | Code field variants | f14 | lines 1–3 → `10` (2–3 `code_width_unexpected`); line 4 `code_invalid trailing_space`; line 5 `inner_space`; line 6 `empty_code`; line 7 → `A-10` |
+| P18 | Code field variants | f14 | lines 1–3 → `10` (2–3 `code_width_unexpected`); line 4 `code_invalid trailing_space` (also `code_width_unexpected`: 10 wide); line 5 `inner_space`; line 6 `empty_code`; line 7 → `A-10` |
 | P19 | Header line | f15 | file refused `unexpected_header` |
 | P20 | Binary file | f16 | file refused `not_a_text_file` |
 | P21 | Limits | f17, f17b | refused `line_too_long` / `too_many_fields` with line 11 |
@@ -263,6 +272,15 @@ Run once by the owner against their copy, after M2 is built and approved. It con
 A mismatch is reported to the owner, not "fixed".
 
 ---
+
+## 8.3 Implementation status (23 Nov 2026)
+
+Implemented locally as profile `essl.x2008.attlog/1`:
+- migration `supabase/migrations/0013_biometric_dat_import.sql`, local only and not applied to any hosted database;
+- the Admin screen *Biometric Devices → File import*.
+
+All P-tests above, the real-file check (R0–R17) and the upload, security, mapping, time, duplicate, deletion and audit
+tests run in `supabase/tests/biometric_dat_import_test.sql` (see BIOMETRIC_B5_DAT_IMPORT_REPORT.md).
 
 ## 9. Changes to earlier revisions
 
@@ -290,6 +308,6 @@ A mismatch is reported to the owner, not "fixed".
 | Q6 | Which time zone is the device clock set to? Is the clock kept correct (NTP or manual)? | the declared zone for imports; the file carries no zone |
 | Q7 | Does eSSL software (eTimeTrackLite or other) modify, filter or re-export the original records anywhere in this workflow, or did this file come straight from the device to the USB stick? | provenance; trust is "imported file" only |
 | Q8 | The supplied name ends ` (1)(1)`: is this a copy of the stick's file? Can the next file be supplied straight from the stick? | provenance |
-| Q9 | Please record the SHA-256 of the original file (hash only) for §1 | ties the real-file check to the exact file inspected |
+| Q9 | ~~SHA-256 of the original~~ — **answered 23 Nov 2026** (§1). Q8 still open: the uploaded copy was named `…_attlog__1_.dat`, the earlier one `…(1)(1).dat`; the bytes match the inspection exactly | — |
 | Q11 | See BIOMETRIC_HR_REPORT_CORRELATION.md §5 for the questions raised by comparing this export with the eSSL HR report (data source, 15:53:01 punch, shift settings, seconds) | the report and the export may not come from the same records |
 | Q10 | Can the export include other files (user, fingerprint, photo data)? Which files appeared on the stick? | anything other than the attendance file is out of scope and must never be uploaded |

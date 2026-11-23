@@ -146,3 +146,13 @@ end $$;
 call biometric_run_projection();
 update biometric_settings set projection_enabled = false where company_id = 'cccccccc-0000-0000-0000-00000000000a';
 drop table demo_key;
+
+-- B5 DAT import (LOCAL DEMO ONLY): the eSSL X2008 as a file-import device (no agent, never contacted) and a demo
+-- employee with the AttendOS code WR198. The mapping 10 → WR198 is NOT seeded: it is created in the app by an
+-- authorised user, as in real use. The serial below is a placeholder, not the real device's.
+insert into employees (id, company_id, full_name, email, role, department_id, home_location_id, emp_code, joining_date, employment_status)
+values ('00000000-0000-0000-0000-0000000000e8', 'cccccccc-0000-0000-0000-00000000000a', 'Amol Jadhav', 'wr198@acme.in', 'employee',
+        'dddddddd-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 'WR198', '2024-06-01', 'confirmed');
+insert into biometric_devices (company_id, location_id, name, manufacturer, model, serial_number, firmware_version, integration_method, timezone, direction_mode, created_by)
+values ('cccccccc-0000-0000-0000-00000000000a', '11111111-1111-1111-1111-111111111111', 'Andheri HQ X2008 (USB export)', 'essl', 'X2008', 'DEMO-X2008-0001',
+        '8.0.4.2-20180530', 'file_import', 'Asia/Kolkata', 'first_last', '00000000-0000-0000-0000-0000000000a1');

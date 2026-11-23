@@ -3,6 +3,7 @@
 import { Suspense, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AddDeviceWizard } from "@/components/biometric/AddDeviceWizard";
+import { DatImport } from "@/components/biometric/DatImport";
 import { DeviceDetail } from "@/components/biometric/DeviceDetail";
 import { DeviceList } from "@/components/biometric/Devices";
 import { MappingScreen } from "@/components/biometric/Mapping";
@@ -19,8 +20,8 @@ import { useSession } from "@/lib/session";
 import { supabase } from "@/lib/supabase";
 import { must, useLoad } from "@/lib/use-load";
 
-type Tab = "overview" | "devices" | "mapping" | "sync" | "review";
-const TABS: Tab[] = ["overview", "devices", "mapping", "sync", "review"];
+type Tab = "overview" | "devices" | "mapping" | "sync" | "review" | "import";
+const TABS: Tab[] = ["overview", "devices", "mapping", "sync", "review", "import"];
 
 export default function BiometricPage() {
   return (
@@ -99,13 +100,14 @@ function DemoLoader() {
 }
 
 function Biometric({ loading = false, error = null }: { loading?: boolean; error?: string | null }) {
-  const { state, apply, people, offices, live } = useDemo();
+  const { state, apply, people, offices, live, may } = useDemo();
   const params = useSearchParams();
   const router = useRouter();
   const path = usePathname();
   const device = params.get("device");
   const tabParam = params.get("tab") as Tab | null;
-  const tab: Tab = device ? "devices" : tabParam && TABS.includes(tabParam) ? tabParam : "overview";
+  const canImport = may("importBiometricFiles");
+  const tab: Tab = device ? "devices" : tabParam && TABS.includes(tabParam) && (tabParam !== "import" || canImport) ? tabParam : "overview";
   const [adding, setAdding] = useState(false);
 
   const go = (q: Record<string, string>) => {
@@ -137,6 +139,7 @@ function Biometric({ loading = false, error = null }: { loading?: boolean; error
           { id: "mapping", label: "Employee mapping", badge: unmapped ? String(unmapped) : undefined },
           { id: "sync", label: "Sync activity" },
           { id: "review", label: "Review queue", badge: open ? String(open) : undefined },
+          ...(canImport ? [{ id: "import" as Tab, label: "File import" }] : []),
         ]}
       />
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
@@ -145,6 +148,7 @@ function Biometric({ loading = false, error = null }: { loading?: boolean; error
         {tab === "mapping" ? <MappingScreen /> : null}
         {tab === "sync" ? <SyncActivity openDevice={openDevice} /> : null}
         {tab === "review" ? <ReviewQueue /> : null}
+        {tab === "import" ? <DatImport /> : null}
       </div>
       <AddDeviceWizard open={adding} onClose={() => setAdding(false)} onSaved={openDevice} />
     </div>

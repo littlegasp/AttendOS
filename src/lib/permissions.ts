@@ -41,7 +41,8 @@ export type Capability =
   | "mapBiometricCodes"
   | "mapBiometricCompanyWide"
   | "reviewBiometric"
-  | "retryBiometricSync";
+  | "retryBiometricSync"
+  | "importBiometricFiles";
 
 export const ROLES: { id: Role; label: string }[] = [
   { id: "admin", label: "Admin" },
@@ -81,6 +82,7 @@ export const MATRIX: Record<Capability, Record<Role, Scope>> = {
   mapBiometricCompanyWide: { admin: "all", hr: "none", manager: "none", employee: "none" }, // company-wide codes: explicit Admin decision
   reviewBiometric: { admin: "all", hr: "all", manager: "none", employee: "none" }, // review-queue decisions
   retryBiometricSync: { admin: "all", hr: "all", manager: "none", employee: "none" }, // retry failed syncs (from Phase B3–B4)
+  importBiometricFiles: { admin: "all", hr: "none", manager: "none", employee: "none" }, // upload device export files (B5 DAT import; raw records only)
 };
 
 export function scopeOf(role: Role, cap: Capability): Scope {
@@ -140,4 +142,5 @@ export const CAP_LABEL: Record<Capability, string> = {
   mapBiometricCompanyWide: "Company-wide device codes",
   reviewBiometric: "Biometric review decisions",
   retryBiometricSync: "Retry biometric syncs",
+  importBiometricFiles: "Import device export files (raw records)",
 };
