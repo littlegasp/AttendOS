@@ -1,6 +1,6 @@
 # Development-Supabase preflight plan: migrations 0001–0013 incl. B5 DAT import
 
-Status: **PLAN ONLY, for owner review. Nothing in this document has been executed.**
+Status: **Approved by the owner (D1–D7, 23 Nov 2026). G1 (§4.3) done locally — see BIOMETRIC_B5_DEV_PREFLIGHT_G1_REPORT.md. Nothing hosted has been executed; G2 needs the owner's approval.**
 - Date: 23 Nov 2026. Branch `feature/biometric-b1`; the code under test would be pinned to the accepted commit
   (`7a673dc` or a later owner-approved one).
 - No Supabase project has been created, connected to or changed.
@@ -86,7 +86,7 @@ Run `supabase/deploy/check_biometric_prereqs.sql` (read-only, exists), extended 
   project that is then recreated. Recommendation: **frozen**, so the dev run tests exactly what a company database
   will get.
 
-### 4.3 Preparation needed before execution (local work, needs your go-ahead with the plan)
+### 4.3 Preparation needed before execution (done in G1, 23 Nov 2026; tools in `supabase/deploy/dev_preflight/`)
 1. Extend `supabase/deploy/verify_hosted.sql` for 0013:
    - 36 `public` tables with biometrics (21 + 15);
    - the four DAT tables with RLS on and no grants;

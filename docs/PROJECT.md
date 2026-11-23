@@ -431,3 +431,12 @@ key-audit check; B4 Sunday timeline check. Owner dependencies: fresh complete X2
 confirmation of code 10 → WR198. Next: development-Supabase preflight **plan** (not executed):
 docs/biometric/BIOMETRIC_B5_DEV_SUPABASE_PREFLIGHT_PLAN.md — separate disposable dev project, synthetic data only,
 0001–0013 one transaction each, hosted permission matrix and scale tests, dev-only rollback, gates G0–G8, decisions D1–D7.
+
+**B5 preflight G1 done locally (23 Nov 2026):** owner approved D1–D7 and authorised G1 (local preparation only).
+Tooling in `supabase/deploy/dev_preflight/` (guard on the exact project reference + in-database development marker,
+guarded SQL runner, pinned migration apply with SHA-256 manifest and D6 freeze, synthetic seed, hosted permission
+matrix and scale scripts, dev-only rollback). `check_biometric_prereqs.sql` rows 13–20 and `verify_hosted.sql`
+items 15–21 added; pre-existing `verify_hosted.sql` item 14 defect fixed (failed before 0010). Local rehearsal of
+the whole owner sequence on a Supabase-like stack (real Supabase Auth, PostgREST): 35/35; rollback equals a fresh
+0012 schema exactly. Report: docs/biometric/BIOMETRIC_B5_DEV_PREFLIGHT_G1_REPORT.md. Nothing hosted created or run.
+Next: owner decides D1 cost (Micro proposed) and G1b (hosted B3.3/B3.4 suites), then G2 (owner creates the project).
