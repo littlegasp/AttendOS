@@ -73,8 +73,10 @@ checks(item, ok, detail) as (
            and exists (select 1 from pg_trigger where tgname = 'external_guard' and tgrelid = 'public.attendance_events'::regclass and tgenabled = 'O')
            and not exists (select 1 from public.attendance_events where source not in ('web', 'correction', 'biometric', 'import')) end,
          case when not exists (select 1 from fns where proname = 'biometric_project_day') then 'not installed' else
-           'installed; projection enabled for: ' || coalesce((select string_agg(c.slug, ', ') from public.biometric_settings b join public.companies c on c.id = b.company_id
-                                                              where b.projection_enabled), 'no company') end
+           -- read through query_to_xml so this file also runs before 0010 (the table is resolved only when it exists)
+           'installed; projection enabled for: ' || coalesce((xpath('/row/v/text()', query_to_xml($q$select string_agg(c.slug, ', ') as v
+                      from public.biometric_settings b join public.companies c on c.id = b.company_id where b.projection_enabled$q$, false, false, '')))[1]::text,
+                    'no company') end
   -- ---------------------------------------------------------------- 0013 B5 DAT import (each item is true when 0013 is not installed)
   union all
   select '15. DAT 0013 (if installed): the four new tables exist with row level security on; the batch table has the 0013 state columns',
