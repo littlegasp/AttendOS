@@ -1,6 +1,12 @@
 # B5 DAT import: authorised correction pass, review report
 
-Status: **implemented and tested locally, awaiting owner approval.**
+Status: **locally reviewed and accepted by the owner (23 Nov 2026) — approved for local development only.**
+- Still not authorised: running 0013 (or any migration) on hosted Supabase, connecting to a development or production
+  project, deploying, merging, releasing, creating real employee mappings, or starting the next stage (reviewed import
+  records → raw events or projection).
+- Kept documented: the two pre-existing test failures (§7); the owner dependencies in §10 (fresh complete X2008 USB
+  export; HR's written confirmation of code 10 → WR198). Next: the development-Supabase preflight **plan**
+  (BIOMETRIC_B5_DEV_SUPABASE_PREFLIGHT_PLAN.md), for review — not to be executed until explicitly approved.
 - Date: 23 Nov 2026. Branch: `feature/biometric-b1` (reviewed base `e27ef9d`). Local development only.
 - Nothing was done outside local development:
   - no hosted SQL, no production connection, no credential or environment change;

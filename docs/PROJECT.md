@@ -422,3 +422,12 @@ checked before decoding; server-generated batch names (uploaded name never sent/
 unreviewed / 90 days reviewed / 3-year tombstone with bounded lazy deletion (no scheduler). 10 → WR198 is a test
 assumption only. Format doc example replaced with a synthetic line (history not rewritten). Tests: check 84+1 skip,
 test:db 1,025 ok, scale suite 12/12, DAT e2e 97/97. docs/biometric/BIOMETRIC_B5_DAT_IMPORT_CORRECTION_PASS.md.
+
+**B5 correction pass accepted (23 Nov 2026):** owner marked the correction pass locally reviewed and accepted — local
+development only. Still not authorised: hosted migrations (0013 or any), connecting to development or production
+Supabase, deploy/merge/release, real employee mappings, and the next stage (import records → raw events/projection).
+Known pre-existing test failures kept documented (BIOMETRIC_IMPLEMENTATION_STATUS.md): B3.3 intermittent gateway
+key-audit check; B4 Sunday timeline check. Owner dependencies: fresh complete X2008 USB export; HR written
+confirmation of code 10 → WR198. Next: development-Supabase preflight **plan** (not executed):
+docs/biometric/BIOMETRIC_B5_DEV_SUPABASE_PREFLIGHT_PLAN.md — separate disposable dev project, synthetic data only,
+0001–0013 one transaction each, hosted permission matrix and scale tests, dev-only rollback, gates G0–G8, decisions D1–D7.
