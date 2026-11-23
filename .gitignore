@@ -59,3 +59,10 @@ pgrst.log
 
 # real device attendance exports must never be committed (synthetic fixtures live in tests/fixtures/dat)
 *_attlog*.dat
+
+# Development-Supabase preflight: owner-local credentials and reports must never be committed
+attendos-dev-reports/
+*logins*.json
+.env.dev*
+*.dev.env
+__pycache__/
