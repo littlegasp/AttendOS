@@ -80,7 +80,7 @@ checks(item, ok, detail) as (
   select '15. DAT 0013 (if installed): the four new tables exist with row level security on; the batch table has the 0013 state columns',
          case when to_regclass('public.biometric_import_rows') is null then true else
            (select count(*) from tables where relname in ('biometric_import_chunks', 'biometric_import_files', 'biometric_import_rows', 'biometric_device_import_formats') and relrowsecurity) = 4
-           and exists (select 1 from pg_attribute where attrelid = 'public.biometric_import_batches'::regclass and attname = 'purge_pending' and not attisdropped) end,
+           and exists (select 1 from pg_attribute where attrelid = to_regclass('public.biometric_import_batches') and attname = 'purge_pending' and not attisdropped) end,
          case when to_regclass('public.biometric_import_rows') is null then 'not installed' else 'installed' end
   union all
   select '16. DAT 0013: no API role (anon, authenticated, PUBLIC) holds any table or column privilege on the five import tables; the batch table has no read policy (F1)',
@@ -109,9 +109,9 @@ checks(item, ok, detail) as (
   union all
   select '19. DAT 0013: the migration role owns the import rows table (so the ANALYZE after parsing, fix F2, is permitted)',
          case when to_regclass('public.biometric_import_rows') is null then true else
-           pg_has_role(current_user, (select relowner from pg_class where oid = 'public.biometric_import_rows'::regclass), 'MEMBER') end,
+           pg_has_role(current_user, (select relowner from pg_class where oid = to_regclass('public.biometric_import_rows')), 'MEMBER') end,
          case when to_regclass('public.biometric_import_rows') is null then '' else
-           'owner ' || pg_get_userbyid((select relowner from pg_class where oid = 'public.biometric_import_rows'::regclass)) || ', checked as ' || current_user end
+           'owner ' || pg_get_userbyid((select relowner from pg_class where oid = to_regclass('public.biometric_import_rows'))) || ', checked as ' || current_user end
   union all
   select '20. CREATE on schema public refused for anon and authenticated (owner decision D5)',
          not has_schema_privilege('anon', 'public', 'CREATE') and not has_schema_privilege('authenticated', 'public', 'CREATE'),

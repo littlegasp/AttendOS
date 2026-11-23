@@ -273,10 +273,14 @@ def main():
         # ------------------------------------------------------------ G4 migrations + verify
         r = tool(["dev_apply_migrations.py", "--commit", "0000000"], env)
         check(r.returncode != 0 and "not the approved commit" in r.stdout, "G4 dev_apply_migrations.py refuses a commit other than this checkout")
-        r = tool(["dev_apply_migrations.py", "--commit", a.commit], env)
-        check(r.returncode == 0 and r.stdout.count("   ok (") == 13, "G4 0001–0013 applied, each in one transaction with the guard and the manifest check")
-        r = tool(["dev_sql.py", str(REPO / "supabase/deploy/verify_hosted.sql")], env)
-        check(r.returncode == 0 and not not_ok_rows(r.stdout) and r.stdout.count("| t") >= 21, "G4 verify_hosted.sql: all 21 items ok after 0013 (incl. new items 15–21)")
+        for through, n, label in (("0009", 9, "0001–0009"), ("0012", 3, "0010–0012"), ("0013", 1, "0013")):
+            r = tool(["dev_apply_migrations.py", "--commit", a.commit, "--through", through], env)
+            check(r.returncode == 0 and r.stdout.count("   ok (") == n, f"G4 {label} applied, each in one transaction with the guard and the manifest check")
+            r = tool(["dev_sql.py", str(REPO / "supabase/deploy/verify_hosted.sql")], env)
+            for l in not_ok_rows(r.stdout):
+                log("   not ok: " + l[:240])
+            check(r.returncode == 0 and not not_ok_rows(r.stdout) and r.stdout.count("| t") >= 21,
+                  f"G4 verify_hosted.sql after {through}: all 21 items ok (items 15–21 for 0013)")
         r = tool(["dev_apply_migrations.py", "--commit", a.commit], env)
         check(r.returncode == 0 and r.stdout.count("skip ") == 13, "G4 re-running the apply tool changes nothing (all 13 recorded, identical)")
 
