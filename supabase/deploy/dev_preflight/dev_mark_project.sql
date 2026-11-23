@@ -10,16 +10,19 @@ select stop_dev_ref_not_set;
 \endif
 select set_config('attendos.dev_ref', :'dev_ref', false) is not null as dev_ref_received;
 do $$
-declare want text := current_setting('attendos.dev_ref'); m record;
+declare want text := current_setting('attendos.dev_ref'); has boolean; other text;
 begin
   if want !~ '^[a-z]{20}$' then raise exception 'STOP: invalid development project reference'; end if;
-  if to_regclass('public.companies') is not null and exists (select 1 from public.companies) then
-    raise exception 'STOP: this database already holds AttendOS companies; a development marker is only written on an empty, new project';
+  if to_regclass('public.companies') is not null then
+    execute 'select exists (select 1 from public.companies)' into has;
+    if has then
+      raise exception 'STOP: this database already holds AttendOS companies; a development marker is only written on an empty, new project';
+    end if;
   end if;
   if to_regclass('attendos_dev.environment_marker') is not null then
-    select * into m from attendos_dev.environment_marker limit 1;
-    if found and m.project_ref <> want then
-      raise exception 'STOP: this database is already marked for project %, not %', m.project_ref, want;
+    execute 'select project_ref from attendos_dev.environment_marker limit 1' into other;
+    if other is not null and other <> want then
+      raise exception 'STOP: this database is already marked for project %, not %', other, want;
     end if;
   end if;
 end $$;

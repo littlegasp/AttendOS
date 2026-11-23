@@ -100,7 +100,8 @@ def build_db(name, auth_dir):
       alter role authenticated in database {name} set statement_timeout = '8s';
       alter role anon in database {name} set statement_timeout = '3s';
       create schema auth;
-      grant usage on schema auth, public to anon, authenticated, service_role;
+      create schema extensions;   -- present on every Supabase project
+      grant usage on schema auth, public, extensions to anon, authenticated, service_role;
       -- worst case for owner decision D5 and the explicit revokes: API roles may CREATE in public, and new objects
       -- are granted to them automatically (Supabase default privileges)
       grant create on schema public to anon, authenticated;

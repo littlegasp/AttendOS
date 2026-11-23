@@ -48,6 +48,10 @@ def main():
         args += ["-f", g.here("dev_guard.sql")]
         for f in a.files:
             p = Path(f).resolve()
+            for cand in (Path(f), Path(g.here(f)), Path(g.here("..", f))):   # bare names: this folder, then supabase/deploy
+                if cand.is_file():
+                    p = cand.resolve()
+                    break
             if not p.is_file():
                 log(f"STOP: no such file {f}")
                 return 2
