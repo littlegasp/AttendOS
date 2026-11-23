@@ -252,8 +252,8 @@ The diff contains no production keys. The only names in it are the demo's fictio
   - The e2e and screenshots use a renamed copy, which is why no screenshot shows it.
   - Decision A addresses it.
 - **P1 (Medium, privacy, owner decision):**
-  - `docs/biometric/BIOMETRIC_DAT_FORMAT.md:73` shows **file line 1 of the real export** (code 7, 2 Nov 2026,
-    08:41:33) as the format example. That is another employee's real record. It has been in the pushed branch since
+  - `docs/biometric/BIOMETRIC_DAT_FORMAT.md:73` shows **file line 1 of the real export** (an employee other than
+    code 10) as the format example. That is another employee's real record. It has been in the pushed branch since
     commit `2910952` (21 Nov).
   - Options:
     1. Replace it with a synthetic line in a docs-only commit. The record stays in branch history.
