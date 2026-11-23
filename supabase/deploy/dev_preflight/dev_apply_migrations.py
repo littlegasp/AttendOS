@@ -64,13 +64,16 @@ def main():
             return 2
     log(f"commit {head[:12]}; {len(plan)} migrations through {a.through}; every file matches the manifest")
     rc, out = g.psql(env, ["-At", "-v", f"dev_ref={ref}", "-f", g.here("dev_guard.sql"),
-                           "-c", "select coalesce(string_agg(file || ' ' || sha256, ',' order by file), '') from attendos_dev.applied_migrations"])
+                           "-c", "select 'APPLIED:' || coalesce(string_agg(file || ' ' || sha256, ',' order by file), '') from attendos_dev.applied_migrations"])
     if rc != 0:
         log(out)
         log("STOP: the guard refused this database (see above)")
         return 2
     applied = {}
-    last = out.strip().splitlines()[-1] if out.strip() else ""
+    last = next((ln[len("APPLIED:"):] for ln in out.splitlines() if ln.startswith("APPLIED:")), None)
+    if last is None:
+        log("STOP: could not read the list of applied migrations")
+        return 2
     for item in filter(None, last.split(",")):
         f, s = item.split(" ")
         applied[f] = s
