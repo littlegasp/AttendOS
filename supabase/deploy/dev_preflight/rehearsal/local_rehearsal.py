@@ -109,7 +109,8 @@ def build_db(name, auth_dir):
       alter default privileges for role "{ROLE}" in schema public grant all on functions to anon, authenticated, service_role;""")
     env = dict(GOTRUE_DB_DRIVER="postgres", DB_NAMESPACE="auth",
                DATABASE_URL=f"postgres://postgres@127.0.0.1:{PG['PGPORT']}/{name}?sslmode=disable&search_path=auth",
-               GOTRUE_DB_MIGRATIONS_PATH=f"{auth_dir}/migrations", API_EXTERNAL_URL=f"https://{REF}.supabase.co/auth/v1")
+               GOTRUE_DB_MIGRATIONS_PATH=f"{auth_dir}/migrations", API_EXTERNAL_URL=f"https://{REF}.supabase.co/auth/v1",
+               GOTRUE_SITE_URL="http://127.0.0.1:4175", GOTRUE_JWT_SECRET="migrate-only-" + secrets.token_urlsafe(24))
     r = subprocess.run(["./auth", "migrate"], cwd=auth_dir, env={**os.environ, **env}, capture_output=True, text=True)
     if r.returncode:
         raise SystemExit("auth migrate failed: " + r.stderr[-500:])
