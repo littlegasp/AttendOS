@@ -205,7 +205,7 @@ def start_api(auth_dir, postgrest, secret, anon):
 
 
 SNAP = """
-select 'rel ' || c.relkind || ' ' || c.relname, coalesce(array_to_string(c.relacl, ','), '') || ' rls=' || c.relrowsecurity
+select 'rel ' || c.relkind::text || ' ' || c.relname, coalesce(array_to_string(c.relacl, ','), '') || ' rls=' || c.relrowsecurity
   from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'v', 'S')
 union all select 'col ' || c.relname || '.' || a.attname, format_type(a.atttypid, a.atttypmod) || ' nn=' || a.attnotnull || ' def=' ||
        coalesce(pg_get_expr(d.adbin, d.adrelid), '') || ' acl=' || coalesce(array_to_string(a.attacl, ','), '')
@@ -213,7 +213,7 @@ union all select 'col ' || c.relname || '.' || a.attname, format_type(a.atttypid
  where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'v') and a.attnum > 0 and not a.attisdropped
 union all select 'con ' || conrelid::regclass || '.' || conname, pg_get_constraintdef(oid) from pg_constraint where connamespace = 'public'::regnamespace
 union all select 'idx ' || i.indexrelid::regclass, pg_get_indexdef(i.indexrelid) from pg_index i join pg_class c on c.oid = i.indrelid where c.relnamespace = 'public'::regnamespace
-union all select 'trg ' || tgrelid::regclass || '.' || tgname, pg_get_triggerdef(oid) || ' en=' || tgenabled from pg_trigger
+union all select 'trg ' || tgrelid::regclass || '.' || tgname, pg_get_triggerdef(oid) || ' en=' || tgenabled::text from pg_trigger
  where not tgisinternal and tgrelid in (select oid from pg_class where relnamespace = 'public'::regnamespace)
 union all select 'pol ' || tablename || '.' || policyname, cmd || ' ' || coalesce(qual, '') || ' ' || coalesce(with_check, '') || ' ' || array_to_string(roles, ',')
   from pg_policies where schemaname = 'public'

@@ -153,7 +153,9 @@ def main():
         with x.owner() as o:
             log(f"AttendOS dev preflight · DB-level scale · project {x.ref} · {datetime.datetime.now().isoformat(timespec='seconds')}")
             ver = o.execute("show server_version").fetchone()[0]
-            rolecfg = o.execute("select coalesce(array_to_string(rolconfig, ' '), 'default') from pg_roles where rolname = 'authenticated'").fetchone()[0]
+            rolecfg = o.execute("select coalesce(array_to_string(rolconfig, ' '), 'default') || coalesce(' [this database: ' || (select array_to_string(s.setconfig, ' ') "
+                                "from pg_db_role_setting s join pg_database d on d.oid = s.setdatabase where d.datname = current_database() "
+                                "and s.setrole = r.oid) || ']', '') from pg_roles r where rolname = 'authenticated'").fetchone()[0]
             log(f"server {ver}; authenticated role settings: {rolecfg}")
             ids = dict(o.execute("select email, user_id::text from public.employees where email in "
                                  "('a.admin@attendos-dev.example', 'a.admin2@attendos-dev.example', 'a.hr@attendos-dev.example')").fetchall())
