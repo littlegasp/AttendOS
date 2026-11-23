@@ -401,3 +401,13 @@ IN/OUT or reads fields 3–6. Real export (151 lines): 151 ok/new, 17 codes; cod
 Real file never committed (gitignore + hash guard test). Tests: check 81+1 skipped, test:db 990 ok, DAT e2e 48/48.
 90-day purge not built (needs a scheduler). Open: mapping start date for 10 (assumed 2026-11-01 locally), file name
 holds the device serial. docs/biometric/BIOMETRIC_B5_DAT_IMPORT_REPORT.md.
+
+**B5 DAT import technical review (23 Nov 2026, review only, awaiting owner decision):** independent review of
+`e27ef9d`. Isolation, Admin-only functions, locked staging tables, upload integrity, audit minimisation and "no
+attendance side effects" hold (catalog, code and test evidence). Found: F2 (High) classification times out at the
+8 s limit for ≈ 32,000-line files when table statistics are stale (planner re-evaluates the label subquery per row);
+F1 HR can read the batch table directly (0010 grant, now with file name / token hash); F4 X2008 profile accepted for
+any eSSL device; P1 one real record of another employee in the format doc; F5 open-batch limit race; F3 no
+"continue processing"; F6 decode before size check. Recommendations for file name (generated), permissions (HR
+prepares, Admin approves), test-only mapping for 10 → WR198, retention (30 days unreviewed, 90 days reviewed, lazy
+expiry). No code or migration changed. docs/biometric/BIOMETRIC_B5_DAT_IMPORT_TECH_REVIEW.md.
