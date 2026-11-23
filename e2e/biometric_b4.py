@@ -86,7 +86,7 @@ with sync_playwright() as p:
     body = pg.inner_text("main")
     check("demo" not in body.lower() and "Demonstration" not in body, "Admin: live module, no demonstration wording or '· demo' labels")
     check([re.sub(r"\s*\d+$", "", t.split("\n")[0]) for t in tabs_of(pg)] == ["Overview", "Devices", "Employee mapping", "Sync activity", "Review queue", "File import"],
-          f"Admin: the five approved B2 tabs, plus File import (B5 DAT import, Admin only) ({tabs_of(pg)})")
+          f"Admin: the five approved B2 tabs, plus File import (B5 DAT import; HR and Admin) ({tabs_of(pg)})")
     check(pg.get_by_text("Pune Plant reception PC").count() > 0 and pg.get_by_text("Not reported").count() >= 1, "Admin: Sync Agents are real records; the queue depth is shown as Not reported (never invented)")
     shot(pg, "admin-overview-dark")
     pg = c.go("/biometric?tab=devices")

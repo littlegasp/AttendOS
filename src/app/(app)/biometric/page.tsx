@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AddDeviceWizard } from "@/components/biometric/AddDeviceWizard";
 import { DatImport } from "@/components/biometric/DatImport";
@@ -16,6 +16,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { GlassCard } from "@/components/ui";
 import { emptyState, type Office, type Person, PREVIEW_OFFICES, PREVIEW_PEOPLE, seed } from "@/lib/biometric-mock";
 import { loadLive, NotInstalled } from "@/lib/biometric-live";
+import { housekeeping } from "@/lib/dat-import";
 import { useSession } from "@/lib/session";
 import { supabase } from "@/lib/supabase";
 import { must, useLoad } from "@/lib/use-load";
@@ -109,6 +110,10 @@ function Biometric({ loading = false, error = null }: { loading?: boolean; error
   const canImport = may("importBiometricFiles");
   const tab: Tab = device ? "devices" : tabParam && TABS.includes(tabParam) && (tabParam !== "import" || canImport) ? tabParam : "overview";
   const [adding, setAdding] = useState(false);
+  // Import expiry and retention run lazily (no scheduler): one bounded step whenever HR or an Admin opens Biometric.
+  useEffect(() => {
+    if (live && canImport) housekeeping(supabase()).catch(() => {});
+  }, [live, canImport]);
 
   const go = (q: Record<string, string>) => {
     const s = new URLSearchParams(q).toString();

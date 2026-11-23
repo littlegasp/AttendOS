@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
-  DAT_CHUNK_BYTES, DAT_ERROR_TEXT, datErrorText, fromBase64, sha256Hex, showSpaces, splitChunks, toBase64, uploadDat,
+  DAT_CHUNK_BYTES, DAT_ERROR_TEXT, datErrorText, fromBase64, processBatch, sha256Hex, showSpaces, splitChunks, toBase64, uploadDat,
   type RpcClient, type RpcResult,
 } from "../src/lib/dat-import";
 import { can, type Role } from "../src/lib/permissions";
@@ -34,6 +34,7 @@ function fakeServer(o: FakeOpts = {}) {
       switch (fn) {
         case "biometric_dat_begin": {
           if (o.refuseBegin) return Promise.resolve(answer({ ok: false, error: o.refuseBegin, batch_id: "b-old" }));
+          if ("p_file_name" in args) return Promise.resolve({ data: null, error: { message: "function biometric_dat_begin(p_file_name) does not exist" } });
           declared = { size: Number(args.p_size), sha: String(args.p_sha256), hashes: args.p_chunk_hashes as string[] };
           return Promise.resolve(answer({ ok: true, batch_id: "b1", upload_token: token, next_index: 0 }));
         }
@@ -99,7 +100,9 @@ test("showSpaces makes left-padding visible without changing anything else", () 
 
 test("every refusal the database can send has plain-language text", () => {
   const sql = readFileSync(join(__dirname, "..", "supabase", "migrations", "0013_biometric_dat_import.sql"), "utf8");
-  const codes = new Set([...sql.matchAll(/'error', '([a-z_]+)'/g), ...sql.matchAll(/biometric_dat_fail\(b, '([a-z_]+)'/g), ...sql.matchAll(/fail_reason = '([a-z_]+)'/g)].map((m) => m[1]));
+  const codes = new Set([...sql.matchAll(/'error', '([a-z_]+)'/g), ...sql.matchAll(/biometric_dat_fail\(b, '([a-z_]+)'/g), ...sql.matchAll(/fail_reason = '([a-z_]+)'/g),
+    ...sql.matchAll(/why := '([a-z_]+)'/g)].map((m) => m[1]));
+  for (const c of ["no_import_format", "model_not_supported", "continue_processing", "being_processed", "review_timeout", "retention_period"]) assert.ok(codes.has(c), `0013 sends ${c}`);
   assert.ok(codes.size >= 25, `found ${codes.size} codes`);
   for (const c of codes) assert.ok(DAT_ERROR_TEXT[c], `missing text for ${c}`);
   assert.equal(datErrorText("hash_mismatch").includes("Nothing was kept"), true);
@@ -111,7 +114,7 @@ test("upload: begin, all chunks in order, finish, process until ready — the se
   const f = fakeServer();
   const b = bytesOf(DAT_CHUNK_BYTES + 500);
   const seen: string[] = [];
-  const r = await uploadDat(f.sb, { name: "x.dat", bytes: b }, "dev", "Asia/Kolkata", { wait: noWait, onProgress: (p) => seen.push(p.phase) });
+  const r = await uploadDat(f.sb, { bytes: b }, "dev", "Asia/Kolkata", { wait: noWait, onProgress: (p) => seen.push(p.phase) });
   assert.deepEqual(r, { batchId: "b1", state: "ready_for_review", error: null });
   const begin = f.calls.find((c) => c.fn === "biometric_dat_begin")!.args;
   assert.equal(begin.p_sha256, hex(b));
@@ -123,7 +126,7 @@ test("upload: begin, all chunks in order, finish, process until ready — the se
 
 test("upload: a lost answer is retried safely (the server sees an idempotent repeat)", async () => {
   const f = fakeServer({ dropAnswerOnce: 0 });
-  const r = await uploadDat(f.sb, { name: "x.dat", bytes: bytesOf(DAT_CHUNK_BYTES + 10) }, "dev", "Asia/Kolkata", { wait: noWait });
+  const r = await uploadDat(f.sb, { bytes: bytesOf(DAT_CHUNK_BYTES + 10) }, "dev", "Asia/Kolkata", { wait: noWait });
   assert.equal(r.state, "ready_for_review");
   const idx = f.calls.filter((c) => c.fn === "biometric_dat_chunk").map((c) => c.args.p_index);
   assert.deepEqual(idx, [0, 0, 1]);
@@ -131,7 +134,7 @@ test("upload: a lost answer is retried safely (the server sees an idempotent rep
 
 test("upload: a network failure on finish is retried", async () => {
   const f = fakeServer({ failNetworkOnce: "biometric_dat_finish" });
-  const r = await uploadDat(f.sb, { name: "x.dat", bytes: bytesOf(100) }, "dev", "Asia/Kolkata", { wait: noWait });
+  const r = await uploadDat(f.sb, { bytes: bytesOf(100) }, "dev", "Asia/Kolkata", { wait: noWait });
   assert.equal(r.state, "ready_for_review");
   assert.equal(f.calls.filter((c) => c.fn === "biometric_dat_finish").length, 2);
 });
@@ -142,7 +145,7 @@ test("upload: resume after refresh takes over with a new token and continues fro
   const f2 = fakeServer({ refuseBegin: "resume_available", resumeFrom: 1 });
   f2.setDeclared({ size: b.length, sha: hex(b), hashes: splitChunks(b).map(hex) });
   f2.stored().set(0, splitChunks(b)[0]);
-  const r = await uploadDat(f2.sb, { name: "x.dat", bytes: b }, "dev", "Asia/Kolkata", { wait: noWait });
+  const r = await uploadDat(f2.sb, { bytes: b }, "dev", "Asia/Kolkata", { wait: noWait });
   assert.equal(r.state, "ready_for_review");
   const chunkCalls = f2.calls.filter((c) => c.fn === "biometric_dat_chunk");
   assert.deepEqual(chunkCalls.map((c) => c.args.p_index), [1, 2]);
@@ -152,22 +155,44 @@ test("upload: resume after refresh takes over with a new token and continues fro
 test("upload: resuming with a DIFFERENT file is refused before any byte is sent", async () => {
   const f = fakeServer({ refuseBegin: "resume_available", resumeFrom: 1 });
   f.setDeclared({ size: 10, sha: "0".repeat(64), hashes: ["0".repeat(64)] });
-  const r = await uploadDat(f.sb, { name: "x.dat", bytes: bytesOf(10) }, "dev", "Asia/Kolkata", { wait: noWait });
+  const r = await uploadDat(f.sb, { bytes: bytesOf(10) }, "dev", "Asia/Kolkata", { wait: noWait });
   assert.equal(r.error, "chunk_conflict");
   assert.equal(f.calls.filter((c) => c.fn === "biometric_dat_chunk").length, 0);
 });
 
 test("upload: refusals at begin are returned as data (already imported, too large, empty)", async () => {
   const f = fakeServer({ refuseBegin: "already_imported" });
-  assert.equal((await uploadDat(f.sb, { name: "x.dat", bytes: bytesOf(10) }, "dev", "Asia/Kolkata", { wait: noWait })).error, "already_imported");
-  assert.equal((await uploadDat(f.sb, { name: "x.dat", bytes: new Uint8Array() }, "dev", "Asia/Kolkata")).error, "empty_file");
-  assert.equal((await uploadDat(f.sb, { name: "x.dat", bytes: new Uint8Array(16777217) }, "dev", "Asia/Kolkata")).error, "file_too_large");
+  assert.equal((await uploadDat(f.sb, { bytes: bytesOf(10) }, "dev", "Asia/Kolkata", { wait: noWait })).error, "already_imported");
+  assert.equal((await uploadDat(f.sb, { bytes: new Uint8Array() }, "dev", "Asia/Kolkata")).error, "empty_file");
+  assert.equal((await uploadDat(f.sb, { bytes: new Uint8Array(16777217) }, "dev", "Asia/Kolkata")).error, "file_too_large");
+});
+
+test("upload: the file's own name is never sent (the X2008 puts its serial number in it)", async () => {
+  const f = fakeServer();
+  const r = await uploadDat(f.sb, { bytes: bytesOf(50) }, "dev", "Asia/Kolkata", { wait: noWait });
+  assert.equal(r.state, "ready_for_review");
+  for (const c of f.calls) assert.ok(!JSON.stringify(c.args).includes("attlog") && !("p_file_name" in c.args), `${c.fn} sends no file name`);
+});
+
+test("continue processing: choosing the same file after an interrupted check carries on checking it (no new upload)", async () => {
+  const f = fakeServer({ refuseBegin: "continue_processing", processSteps: 3 });
+  const r = await uploadDat(f.sb, { bytes: bytesOf(50) }, "dev", "Asia/Kolkata", { wait: noWait });
+  assert.deepEqual(r, { batchId: "b-old", state: "ready_for_review", error: null });
+  assert.equal(f.calls.filter((c) => c.fn === "biometric_dat_chunk" || c.fn === "biometric_dat_finish").length, 0);
+  assert.ok(f.calls.filter((c) => c.fn === "biometric_dat_process").every((c) => c.args.p_batch === "b-old"));
+});
+
+test("continue processing: a dropped connection mid-check is retried, then the check completes", async () => {
+  const f = fakeServer({ failNetworkOnce: "biometric_dat_process", processSteps: 4 });
+  const r = await processBatch(f.sb, "b1", { wait: noWait });
+  assert.equal(r.state, "ready_for_review");
+  assert.equal(f.calls.filter((c) => c.fn === "biometric_dat_process").length, 5);
 });
 
 test("upload: 'Not allowed' is not retried", async () => {
   let n = 0;
   const sb: RpcClient = { rpc: () => { n++; return Promise.resolve({ data: null, error: { message: "Not allowed" } }); } };
-  await assert.rejects(uploadDat(sb, { name: "x.dat", bytes: bytesOf(10) }, "dev", "Asia/Kolkata", { wait: noWait }), /Not allowed/);
+  await assert.rejects(uploadDat(sb, { bytes: bytesOf(10) }, "dev", "Asia/Kolkata", { wait: noWait }), /Not allowed/);
   assert.equal(n, 1);
 });
 
@@ -218,8 +243,11 @@ test("real X2008 export (local only): hash, size and six-field CRLF structure", 
 
 /* ------------------------------------------------------------------ permission */
 
-test("file import is an Admin capability; HR keeps code mapping", () => {
+test("file import: HR and Admin prepare; only Admin approves, deletes, downloads, assigns formats; mapping rights unchanged", () => {
   const roles: Role[] = ["admin", "hr", "manager", "employee"];
-  assert.deepEqual(roles.filter((r) => can(r, "importBiometricFiles")), ["admin"]);
+  assert.deepEqual(roles.filter((r) => can(r, "importBiometricFiles")), ["admin", "hr"]);
+  assert.deepEqual(roles.filter((r) => can(r, "approveBiometricImports")), ["admin"]);
   assert.deepEqual(roles.filter((r) => can(r, "mapBiometricCodes")), ["admin", "hr"]);
+  assert.deepEqual(roles.filter((r) => can(r, "mapBiometricCompanyWide")), ["admin"]);
+  assert.deepEqual(roles.filter((r) => can(r, "manageBiometricDevices")), ["admin"]);
 });

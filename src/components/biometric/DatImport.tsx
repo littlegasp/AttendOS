@@ -5,8 +5,9 @@ import { Modal } from "@/components/Modal";
 import { EmptyState, ErrorState, LoadingState } from "@/components/States";
 import { Button, FormInput, FormSelect, FormTextarea, GlassCard, MetricCard, SectionCard, StatusBadge, type AttendanceStatus } from "@/components/ui";
 import {
-  batchAction, CODE_TEXT, datErrorText, type DatBatch, type DatCode, type DatRow, type DatState, downloadOriginal, DUP_TEXT, FLAG_TEXT, fmtBytes,
-  listBatches, loadCodes, loadRows, MAP_TEXT, type RowFilter, sha256Hex, showSpaces, STATE_TEXT, TIME_TEXT, uploadDat, type UploadProgress,
+  batchAction, CODE_TEXT, DAT_FORMAT, datErrorText, type DatBatch, type DatCode, type DatDevice, type DatRow, type DatState, downloadOriginal, DUP_TEXT,
+  FLAG_TEXT, fmtBytes, listBatches, loadCodes, loadRows, MAP_TEXT, processBatch, type RowFilter, setDeviceFormat, sha256Hex, showSpaces, STATE_TEXT,
+  TIME_TEXT, uploadDat, type UploadProgress,
 } from "@/lib/dat-import";
 import { friendlyError, supabase } from "@/lib/supabase";
 import { toast } from "@/lib/toast";
@@ -22,18 +23,23 @@ const STATE_BADGE: Record<DatState, AttendanceStatus> = {
 const IN_PROGRESS: DatState[] = ["uploading", "uploaded", "parsing", "classifying"];
 
 /**
- * B5 offline DAT import (Admin). The X2008 USB export is kept exactly as exported; every line is shown for review.
- * Nothing here adds attendance, works out IN/OUT, or gives the unnamed fields a meaning.
+ * B5 offline DAT import. HR and Admin prepare imports (upload, check, continue, cancel their own, view); an Admin
+ * approves (marks reviewed), deletes, downloads the original, cancels others' uploads and assigns a device's file
+ * format. The server enforces all of it; the buttons only mirror it. The X2008 USB export is kept exactly as exported
+ * and every line is shown for review. Nothing here adds attendance, works out IN/OUT, or gives the unnamed fields a
+ * meaning. The uploaded file's own name is never shown or stored (the X2008 puts its serial number in it).
  */
 export function DatImport() {
   const { live, may } = useDemo();
   const [batches, setBatches] = useState<DatBatch[] | null>(null);
+  const [devices, setDevices] = useState<DatDevice[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const reload = useCallback(async () => {
     try {
       const r = await listBatches(supabase());
       setBatches(r.batches);
+      setDevices(r.devices);
       setError(null);
     } catch (e) {
       setError(friendlyError(e));
@@ -51,7 +57,7 @@ export function DatImport() {
     );
   }
   if (!may("importBiometricFiles")) {
-    return <GlassCard><EmptyState title="Only an Admin imports device files" body="Ask an Admin to import the file. You can map employee codes in Employee mapping." /></GlassCard>;
+    return <GlassCard><EmptyState title="Only HR and Admins import device files" body="Ask HR or an Admin to import the file." /></GlassCard>;
   }
   if (error && !batches) return <GlassCard><ErrorState title="Couldn't load the imports" body={error} onRetry={reload} /></GlassCard>;
   if (!batches) return <LoadingState kind="table" />;
@@ -72,7 +78,8 @@ export function DatImport() {
         <BatchReview batch={current} onBack={() => setOpen(null)} onChanged={reload} />
       ) : (
         <>
-          <UploadCard onDone={async (id) => { await reload(); if (id) setOpen(id); }} />
+          <UploadCard devices={devices} onDone={async (id) => { await reload(); if (id) setOpen(id); }} />
+          <DeviceFormats devices={devices} onChanged={reload} />
           <BatchList batches={batches} onOpen={setOpen} onChanged={reload} />
         </>
       )}
@@ -82,12 +89,15 @@ export function DatImport() {
 
 /* ------------------------------------------------------------------ upload */
 
-function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
-  const { state, tz } = useDemo();
-  const devices = state.devices.filter((d) => d.manufacturer === "essl" && !d.disabled);
+function UploadCard({ devices: all, onDone }: { devices: DatDevice[]; onDone: (batchId: string | null) => void }) {
+  const { tz } = useDemo();
+  const devices = all.filter((d) => d.format_version === DAT_FORMAT && d.eligible && d.status !== "disabled");
   const [device, setDevice] = useState(devices[0]?.id ?? "");
+  useEffect(() => {
+    if (!devices.some((d) => d.id === device)) setDevice(devices[0]?.id ?? "");
+  }, [devices, device]);
   const [zone, setZone] = useState(tz);
-  const [file, setFile] = useState<{ name: string; bytes: Uint8Array; sha: string } | null>(null);
+  const [file, setFile] = useState<{ bytes: Uint8Array; sha: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +107,7 @@ function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
     setFile(null);
     if (!f) return;
     const bytes = new Uint8Array(await f.arrayBuffer());
-    setFile({ name: f.name, bytes, sha: await sha256Hex(bytes) });
+    setFile({ bytes, sha: await sha256Hex(bytes) });
   };
 
   const run = async () => {
@@ -108,7 +118,7 @@ function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
       const r = await uploadDat(supabase(), file, device, zone.trim(), { onProgress: setProgress });
       if (r.error) {
         setError(datErrorText(r.error) + (r.detail && typeof r.detail.line === "number" ? ` (line ${r.detail.line})` : ""));
-        if (r.error === "already_imported" && r.batchId) onDone(r.batchId);
+        if ((r.error === "already_imported") && r.batchId) onDone(r.batchId);
         else onDone(null);
       } else {
         toast({ tone: "success", title: "File imported for review", body: "Every line is kept. Nothing was added to attendance." });
@@ -126,7 +136,12 @@ function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
   if (!devices.length) {
     return (
       <SectionCard title="Import a device file" subtitle="eSSL X2008 attendance export (.dat from the USB stick)">
-        <EmptyState title="No eSSL device registered" body="Add the eSSL device the file comes from in Devices (connection: File import), then import its file here." />
+        <EmptyState
+          title="No device is set up for file import"
+          body={all.length
+            ? "An Admin first allows X2008 file import for the device the file comes from (below, under Devices and file formats)."
+            : "Add the eSSL X2008 the file comes from in Devices (connection: File import). An Admin then allows its file import here."}
+        />
       </SectionCard>
     );
   }
@@ -134,7 +149,7 @@ function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
     <SectionCard title="Import a device file" subtitle="eSSL X2008 attendance export (.dat from the USB stick) — format essl.x2008.attlog/1">
       <div className="stack">
         <div className="form-2">
-          <FormSelect label="Device the file comes from" required value={device} onChange={(e) => setDevice(e.target.value)} options={devices.map((d) => ({ value: d.id, label: `${d.name} · ${d.model}` }))} />
+          <FormSelect label="Device the file comes from" required value={device} onChange={(e) => setDevice(e.target.value)} options={devices.map((d) => ({ value: d.id, label: `${d.name} · ${d.model ?? ""}` }))} />
           <FormInput label="Time zone of the device clock" required value={zone} onChange={(e) => setZone(e.target.value)} helper="The file has no time zone. The original times are kept as written; this zone is only used to place them in time." />
         </div>
         <FormInput
@@ -144,11 +159,10 @@ function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
           required
           disabled={busy}
           onChange={(e) => void pick(e.target.files?.[0])}
-          helper="Choose the file exactly as it came from the device. Don't open and save it in Excel or another program first."
+          helper="Choose the file exactly as it came from the device. Don't open and save it in Excel or another program first. AttendOS names the import itself; the file's own name is not kept."
         />
         {file ? (
           <dl className="bio-dl small">
-            <div><dt>File</dt><dd className="mono bio-wrap">{file.name}</dd></div>
             <div><dt>Size</dt><dd>{fmtBytes(file.bytes.length)}</dd></div>
             <div><dt>Check value (SHA-256)</dt><dd className="mono bio-wrap">{file.sha}</dd></div>
           </dl>
@@ -171,15 +185,81 @@ function UploadCard({ onDone }: { onDone: (batchId: string | null) => void }) {
   );
 }
 
+/* ------------------------------------------------------------------ device file formats (Admin assigns) */
+
+function DeviceFormats({ devices, onChanged }: { devices: DatDevice[]; onChanged: () => void }) {
+  const { may } = useDemo();
+  const admin = may("approveBiometricImports");
+  const [busy, setBusy] = useState<string | null>(null);
+  if (!devices.length) return null;
+  const set = async (d: DatDevice, format: string | null) => {
+    setBusy(d.id);
+    const err = await setDeviceFormat(supabase(), d.id, format).catch(friendlyError);
+    setBusy(null);
+    toast(err ? { tone: "danger", title: "Not changed", body: err }
+      : { tone: "success", title: format ? "File import allowed" : "File import switched off", body: format ? `${d.name} can now import X2008 export files.` : `${d.name} can no longer import files.` });
+    onChanged();
+  };
+  return (
+    <SectionCard title="Devices and file formats" subtitle="A device imports files only after an Admin allows it. The X2008 export format was checked on the eSSL X2008 only; other models are not supported.">
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr><th scope="col">Device</th><th scope="col">Model</th><th scope="col">Firmware</th><th scope="col">File import</th><th scope="col"><span className="sr-only">Actions</span></th></tr>
+          </thead>
+          <tbody>
+            {devices.map((d) => (
+              <tr key={d.id}>
+                <th scope="row" className="bio-wrap">{d.name}</th>
+                <td>{d.model ?? "—"}</td>
+                <td className="small">{d.firmware ?? "—"}</td>
+                <td>
+                  {d.format_version ? <StatusBadge status="approved" label="X2008 export allowed" />
+                    : d.eligible ? <span className="muted small">Not allowed yet</span> : <span className="muted small">Not supported for this model</span>}
+                </td>
+                <td>
+                  {admin && d.eligible ? (
+                    d.format_version
+                      ? <button type="button" className="link-btn small" disabled={busy === d.id} onClick={() => void set(d, null)}>Switch off</button>
+                      : <Button size="sm" loading={busy === d.id} onClick={() => void set(d, DAT_FORMAT)}>Allow X2008 file import</Button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
 /* ------------------------------------------------------------------ list */
 
+const RETENTION_TEXT = (b: DatBatch, tz: string): string | null => {
+  if (b.retention?.removing) return "Being removed";
+  if (b.retention?.data_until) return `File and records kept until ${fmtTime(b.retention.data_until, tz)}`;
+  if (b.retention?.record_until) return `Import record kept until ${fmtTime(b.retention.record_until, tz)}`;
+  return null;
+};
+
 function BatchList({ batches, onOpen, onChanged }: { batches: DatBatch[]; onOpen: (id: string) => void; onChanged: () => void }) {
-  const { tz } = useDemo();
+  const { tz, may } = useDemo();
+  const admin = may("approveBiometricImports");
   const [deleting, setDeleting] = useState<DatBatch | null>(null);
+  const [continuing, setContinuing] = useState<string | null>(null);
   const cancel = async (b: DatBatch) => {
     const err = await batchAction(supabase(), "biometric_dat_cancel", { p_batch: b.id }).catch(friendlyError);
     toast(err ? { tone: "danger", title: "Not cancelled", body: err } : { tone: "success", title: "Upload cancelled", body: "Nothing of it was kept." });
     onChanged();
+  };
+  const carryOn = async (b: DatBatch) => {
+    setContinuing(b.id);
+    const r = await processBatch(supabase(), b.id).catch((e) => ({ batchId: b.id, state: null, error: friendlyError(e) }));
+    setContinuing(null);
+    if (r.error) toast({ tone: "danger", title: "Checking stopped", body: datErrorText(r.error) });
+    else toast({ tone: "success", title: "File checked", body: "Every line is kept. Nothing was added to attendance." });
+    await onChanged();
+    if (!r.error) onOpen(b.id);
   };
   if (!batches.length) {
     return <SectionCard title="Imported files"><EmptyState title="No files imported yet" body="Imported files appear here with every line kept for review." /></SectionCard>;
@@ -187,7 +267,7 @@ function BatchList({ batches, onOpen, onChanged }: { batches: DatBatch[]; onOpen
   return (
     <SectionCard title="Imported files" subtitle="Newest first. A file can be imported once; a refused or deleted import can be repeated.">
       <div className="table-wrap">
-        <table className="table">
+        <table className="table bio-batches">
           <thead>
             <tr>
               <th scope="col">File</th><th scope="col">Device</th><th scope="col">Status</th><th scope="col" className="num">Lines</th>
@@ -200,22 +280,26 @@ function BatchList({ batches, onOpen, onChanged }: { batches: DatBatch[]; onOpen
                 <th scope="row" className="bio-wrap">
                   {b.state === "ready_for_review" || b.state === "reviewed"
                     ? <button type="button" className="link-btn mono bio-wrap" onClick={() => onOpen(b.id)}>{b.file_name}</button>
-                    : <span className="mono">{b.state === "deleted" ? "(deleted)" : b.file_name}</span>}
+                    : <span className="mono">{b.file_name}</span>}
                   <span className="tiny muted block mono" title={b.sha256}>SHA-256 {b.sha256.slice(0, 12)}…</span>
+                  {RETENTION_TEXT(b, tz) ? <span className="tiny muted block">{RETENTION_TEXT(b, tz)}</span> : null}
                 </th>
                 <td className="bio-wrap">{b.device_name ?? "—"}</td>
                 <td>
                   <StatusBadge status={STATE_BADGE[b.state]} label={STATE_TEXT[b.state]} />
                   {b.fail_reason ? <span className="tiny block text-danger-strong">{datErrorText(b.fail_reason)}{b.fail_line ? ` (line ${b.fail_line})` : ""}</span> : null}
                   {b.state === "uploading" ? <span className="tiny block muted">{b.next_index} of {b.chunk_count} parts received{b.mine ? " — choose the same file above to continue" : ""}</span> : null}
+                  {["uploaded", "parsing", "classifying"].includes(b.state) ? <span className="tiny block muted">{b.mine ? "Checking was interrupted. Continue it here." : "Being checked by the person who uploaded it."}</span> : null}
                 </td>
                 <td className="num">{b.lines ?? "—"}</td>
                 <td className="small">{fmtTime(b.created_at, tz)}<span className="tiny muted block">{b.uploaded_by ?? ""}</span></td>
                 <td>
                   <div className="row bio-actions">
                     {b.state === "ready_for_review" || b.state === "reviewed" ? <Button size="sm" onClick={() => onOpen(b.id)}>Open</Button> : null}
-                    {IN_PROGRESS.includes(b.state) ? <button type="button" className="link-btn small" onClick={() => void cancel(b)}>Cancel</button> : null}
-                    {["ready_for_review", "reviewed", "failed", "expired", "cancelled"].includes(b.state) ? <button type="button" className="link-btn small" onClick={() => setDeleting(b)}>Delete</button> : null}
+                    {b.mine && ["uploaded", "parsing", "classifying"].includes(b.state)
+                      ? <Button size="sm" loading={continuing === b.id} onClick={() => void carryOn(b)}>Continue processing</Button> : null}
+                    {IN_PROGRESS.includes(b.state) && (b.mine || admin) ? <button type="button" className="link-btn small" onClick={() => void cancel(b)}>Cancel</button> : null}
+                    {admin && ["ready_for_review", "reviewed", "failed", "expired", "cancelled"].includes(b.state) ? <button type="button" className="link-btn small" onClick={() => setDeleting(b)}>Delete</button> : null}
                   </div>
                 </td>
               </tr>
@@ -233,7 +317,7 @@ function DeleteDialog({ batch, onClose, onDone }: { batch: DatBatch; onClose: ()
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <Modal open title="Delete this import" subtitle={batch.state === "deleted" ? "" : batch.file_name} onClose={onClose}>
+    <Modal open title="Delete this import" subtitle={batch.file_name} onClose={onClose}>
       <form
         className="stack"
         onSubmit={async (e) => {
@@ -242,12 +326,12 @@ function DeleteDialog({ batch, onClose, onDone }: { batch: DatBatch; onClose: ()
           const err = await batchAction(supabase(), "biometric_dat_delete", { p_batch: batch.id, p_reason: reason }).catch(friendlyError);
           setBusy(false);
           if (err) return setError(err);
-          toast({ tone: "success", title: "Import deleted", body: "The file and its lines were removed. The record of the import and its history stay." });
+          toast({ tone: "success", title: "Import deleted", body: "The file and its lines can no longer be opened; very large files finish being removed over the next few visits. The record of the import and its history stay." });
           onDone();
           onClose();
         }}
       >
-        <p className="small">The stored file and all its lines are removed. The import stays listed as deleted (size, check value, who and when), and its history is kept. Nothing in attendance changes.</p>
+        <p className="small">The stored file and all its lines are removed and can no longer be opened. The import stays listed as deleted (its AttendOS name, size, check value, who and when) for 3 years, and its history is kept. Nothing in attendance changes.</p>
         <FormTextarea label="Reason" required rows={2} value={reason} onChange={(e) => setReason(e.target.value)} helper="At least 5 characters. Kept with the import." />
         {error ? <div className="alert danger" role="alert"><p>{error}</p></div> : null}
         <div className="dialog-actions">
@@ -263,6 +347,7 @@ function DeleteDialog({ batch, onClose, onDone }: { batch: DatBatch; onClose: ()
 
 function BatchReview({ batch, onBack, onChanged }: { batch: DatBatch; onBack: () => void; onChanged: () => void }) {
   const { tz, may } = useDemo();
+  const admin = may("approveBiometricImports");
   const [codes, setCodes] = useState<{ codes: DatCode[]; invalid_codes: number; totals: Record<string, number> } | null>(null);
   const [filter, setFilter] = useState<RowFilter>("all");
   const [code, setCode] = useState<string | null>(null);
@@ -306,21 +391,23 @@ function BatchReview({ batch, onBack, onChanged }: { batch: DatBatch; onBack: ()
       <SectionCard
         title="Import review"
         subtitle={`${batch.device_name ?? "Device"} · imported ${fmtTime(batch.created_at, tz)}${batch.uploaded_by ? ` by ${batch.uploaded_by}` : ""}`}
-        actions={
+        actions={admin ? (
           <>
             <Button size="sm" onClick={download}>Download original</Button>
             {batch.state === "ready_for_review" ? <Button size="sm" variant="primary" onClick={() => setReviewing(true)}>Mark as reviewed</Button> : null}
             <Button size="sm" variant="danger" onClick={() => setDeleting(true)}>Delete</Button>
           </>
-        }
+        ) : undefined}
       >
         <div className="stack">
           <dl className="bio-dl small">
-            <div><dt>File</dt><dd className="mono bio-wrap">{batch.file_name}</dd></div>
+            <div><dt>Import name</dt><dd className="mono bio-wrap">{batch.file_name}</dd></div>
             <div><dt>Status</dt><dd><StatusBadge status={STATE_BADGE[batch.state]} label={STATE_TEXT[batch.state]} />{batch.reviewed_at ? <span className="tiny muted"> {batch.reviewed_by} · {fmtTime(batch.reviewed_at, tz)}</span> : null}</dd></div>
             <div><dt>Size</dt><dd>{batch.size !== null ? fmtBytes(batch.size) : "—"}</dd></div>
             <div><dt>Check value (SHA-256)</dt><dd className="mono bio-wrap">{batch.sha256}</dd></div>
             <div><dt>Format</dt><dd className="mono">{batch.format_version}</dd></div>
+            <div><dt>Device model and firmware</dt><dd>{batch.device_model ?? "—"}{batch.device_firmware ? ` · ${batch.device_firmware}` : " · firmware not recorded"}</dd></div>
+            <div><dt>Retention</dt><dd>{RETENTION_TEXT(batch, tz) ?? "—"}</dd></div>
             <div><dt>Device time zone (declared)</dt><dd>{batch.timezone}</dd></div>
             <div><dt>Line endings</dt><dd>Windows (CRLF){batch.final_terminator === "none" ? "; last line without line ending" : ""}{batch.bom === "utf8" ? "; starts with a byte-order mark" : ""}</dd></div>
           </dl>
@@ -332,6 +419,7 @@ function BatchReview({ batch, onBack, onChanged }: { batch: DatBatch; onBack: ()
             <MetricCard label="Records with a mapping" value={codes ? (codes.totals.mapped ?? 0) + (codes.totals.inactive ?? 0) : null} tone="success" note="At the time of each record" />
             <MetricCard label="Records not mapped" value={codes ? (codes.totals.unmapped ?? 0) + (codes.totals.undetermined ?? 0) : null} tone={codes && (codes.totals.unmapped ?? 0) ? "warning" : "neutral"} note="Kept for review" />
           </div>
+          {!admin && batch.state === "ready_for_review" ? <p className="meta">An Admin marks this import as reviewed. Until then, or if nobody does, its file and records are removed 30 days after it was checked.</p> : null}
           {error ? <div className="alert danger" role="alert"><p>{error}</p></div> : null}
         </div>
       </SectionCard>

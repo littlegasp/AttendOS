@@ -411,3 +411,14 @@ any eSSL device; P1 one real record of another employee in the format doc; F5 op
 "continue processing"; F6 decode before size check. Recommendations for file name (generated), permissions (HR
 prepares, Admin approves), test-only mapping for 10 → WR198, retention (30 days unreviewed, 90 days reviewed, lazy
 expiry). No code or migration changed. docs/biometric/BIOMETRIC_B5_DAT_IMPORT_TECH_REVIEW.md.
+
+**B5 DAT import correction pass (23 Nov 2026, local, awaiting owner approval):** owner-approved corrections to 0013
+(never run hosted, so corrected in place). HR and Admin prepare imports (upload, process, Continue processing,
+cancel own, view); Admin alone marks reviewed, deletes, downloads, cancels others' uploads and assigns a device's file
+format; mapping rights unchanged. F1 batch table no longer readable by any API role; F2 labels materialised + ANALYZE
+after parsing (32,000 and 200,000 lines, autovacuum on/off, every call < 8 s); F4 per-device Admin-assigned profile,
+X2008 only, model/firmware on the batch; F5 company advisory lock (4 simultaneous starts → 3 open); F6 base64 length
+checked before decoding; server-generated batch names (uploaded name never sent/stored/shown); retention 30 days
+unreviewed / 90 days reviewed / 3-year tombstone with bounded lazy deletion (no scheduler). 10 → WR198 is a test
+assumption only. Format doc example replaced with a synthetic line (history not rewritten). Tests: check 84+1 skip,
+test:db 1,025 ok, scale suite 12/12, DAT e2e 97/97. docs/biometric/BIOMETRIC_B5_DAT_IMPORT_CORRECTION_PASS.md.

@@ -5,9 +5,11 @@
  * duplicate labels and the mapping preview happen in the database (migration 0013), so what is stored always
  * derives from the stored original. Nothing here writes attendance, raw biometric events or projection.
  *
- * Upload protocol (all calls are Admin-only database functions):
+ * Upload protocol (database functions; HR and Admin may upload and process their OWN files — the server checks it):
  *   begin(declared size, SHA-256, per-chunk SHA-256) → chunk(i, bytes) × n → finish → process × k
- * Resending a chunk is harmless (same hash = idempotent repeat); a refresh resumes by taking the upload over.
+ * Resending a chunk is harmless (same hash = idempotent repeat); a refresh resumes by taking the upload over, and an
+ * interrupted check continues with "Continue processing". The file's own name is never sent: the server names
+ * every batch itself (the X2008 puts its serial number in the export's name).
  */
 
 export const DAT_CHUNK_BYTES = 262144; // must equal biometric_dat_limits().chunk_bytes
@@ -60,15 +62,18 @@ export function fmtBytes(n: number): string {
 /** Plain-language text for every refusal the database can give. */
 export const DAT_ERROR_TEXT: Record<string, string> = {
   device_not_found: "Choose a device of this company.",
-  device_not_essl: "This file format is for eSSL devices. Choose the eSSL device the file came from.",
+  no_import_format: "This device has no file format assigned. An Admin assigns the X2008 export format to the device first.",
+  model_not_supported: "This file format was checked only on the eSSL X2008. It cannot be used for this device's model.",
+  unknown_format: "This file format is not known.",
   invalid_timezone: "Choose a valid time zone.",
-  invalid_file_name: "The file name is too long or empty.",
   empty_file: "The file is empty.",
   file_too_large: "The file is larger than 16 MB, which is more than an X2008 export can be.",
   invalid_sha256: "The file could not be checked. Try again.",
   invalid_chunk_hashes: "The file could not be split for upload. Try again.",
   resume_available: "You were already uploading this file. It continues where it stopped.",
-  being_uploaded: "Another Admin is uploading this file right now. Wait for them or ask them to cancel it.",
+  being_uploaded: "Someone else is uploading this file right now. Wait for them, or ask an Admin to cancel it.",
+  continue_processing: "You already uploaded this file and its check was interrupted. It continues where it stopped.",
+  being_processed: "Someone else's upload of this file is still being checked. Wait for them, or ask an Admin to cancel it.",
   already_imported: "This exact file has already been imported. Open the earlier import instead.",
   too_many_open_batches: "Three imports are still in progress. Finish or cancel one first.",
   not_uploading: "This upload is no longer in progress.",
@@ -93,6 +98,8 @@ export const DAT_ERROR_TEXT: Record<string, string> = {
   too_many_malformed_rows: "More than 2 % of the lines are not valid records. This does not look like an X2008 export. Nothing was kept.",
   processing_stalled: "Checking the file stopped for more than 2 hours. Nothing was kept. Upload it again.",
   upload_idle: "The upload was left unfinished for more than 24 hours. Nothing was kept.",
+  review_timeout: "Nobody reviewed this import within 30 days, so its file and records were removed.",
+  retention_period: "The file and records were removed 90 days after review, as the retention rule says.",
   not_ready: "This import is not ready for review.",
   changed_meanwhile: "This import changed meanwhile. Refresh and try again.",
   reason_required: "Give a reason (at least 5 characters).",
@@ -139,7 +146,7 @@ export interface UploadOptions {
  * Upload the original bytes and have the database check them. Resumes automatically when this Admin already has an
  * unfinished upload of the same file. Returns the batch and its final state; never throws for protocol refusals.
  */
-export async function uploadDat(sb: RpcClient, file: { name: string; bytes: Uint8Array }, deviceId: string, timezone: string, opts: UploadOptions = {}): Promise<UploadOutcome> {
+export async function uploadDat(sb: RpcClient, file: { bytes: Uint8Array }, deviceId: string, timezone: string, opts: UploadOptions = {}): Promise<UploadOutcome> {
   const progress = opts.onProgress ?? (() => {});
   const wait = opts.wait;
   const retry = <T,>(f: () => Promise<T>) => retrying(f, 4, wait);
@@ -151,7 +158,7 @@ export async function uploadDat(sb: RpcClient, file: { name: string; bytes: Uint
   const hashes = await Promise.all(chunks.map(sha256Hex));
   const whole = await sha256Hex(file.bytes);
 
-  let begun = await retry(() => call(sb, "biometric_dat_begin", { p_device: deviceId, p_timezone: timezone, p_file_name: file.name, p_size: file.bytes.length, p_sha256: whole, p_chunk_hashes: hashes }));
+  let begun = await retry(() => call(sb, "biometric_dat_begin", { p_device: deviceId, p_timezone: timezone, p_size: file.bytes.length, p_sha256: whole, p_chunk_hashes: hashes }));
   let batchId: string;
   let token: string;
   let next: number;
@@ -170,6 +177,9 @@ export async function uploadDat(sb: RpcClient, file: { name: string; bytes: Uint
     }
     token = String(r.upload_token);
     next = Number(r.next_index);
+  } else if (begun.error === "continue_processing") {
+    // this person's earlier upload of the same file was interrupted while being checked: carry on checking it
+    return processBatch(sb, String(begun.batch_id), opts);
   } else {
     return { batchId: (begun.batch_id as string) ?? null, state: null, error: String(begun.error), detail: begun };
   }
@@ -190,8 +200,17 @@ export async function uploadDat(sb: RpcClient, file: { name: string; bytes: Uint
 
   const fin = await retry(() => call(sb, "biometric_dat_finish", { p_batch: batchId, p_token: token }));
   if (fin.ok !== true) return { batchId, state: (fin.state as DatState) ?? "uploading", error: String(fin.error) };
+  return processBatch(sb, batchId, opts);
+}
 
-  // checking: one unit of work per call until ready or refused
+/**
+ * Check an uploaded file: one unit of work per call until ready for review or refused. Also used by "Continue
+ * processing" after the browser was closed or the connection dropped — the server keeps the progress, and a call that
+ * was interrupted changes nothing, so continuing never repeats or loses a line. Only the uploader may do this.
+ */
+export async function processBatch(sb: RpcClient, batchId: string, opts: UploadOptions = {}): Promise<UploadOutcome> {
+  const progress = opts.onProgress ?? (() => {});
+  const retry = <T,>(f: () => Promise<T>) => retrying(f, 4, opts.wait);
   for (let steps = 0; steps < 200; steps++) {
     const p = await retry(() => call(sb, "biometric_dat_process", { p_batch: batchId }));
     const state = p.state as DatState;
@@ -207,13 +226,21 @@ export async function uploadDat(sb: RpcClient, file: { name: string; bytes: Uint
 
 /* ---------------- read side ---------------- */
 
+export interface DatRetention { data_until: string | null; record_until: string | null; removing: boolean }
+
 export interface DatBatch {
   id: string; state: DatState; file_name: string; size: number | null; sha256: string; source_device_id: string | null; device_name: string | null;
+  device_model: string | null; device_firmware: string | null;
   timezone: string | null; format_version: string | null; lines: number | null; counts: Record<string, number>; next_index: number; chunk_count: number | null;
   progress_line: number; fail_reason: string | null; fail_line: number | null; bom: string | null; final_terminator: string | null;
-  uploaded_by: string | null; mine: boolean; created_at: string; last_activity_at: string; reviewed_by: string | null; reviewed_at: string | null;
-  deleted_at: string | null; delete_reason: string | null; version: number;
+  uploaded_by: string | null; mine: boolean; created_at: string; last_activity_at: string; ready_at: string | null; reviewed_by: string | null; reviewed_at: string | null;
+  deleted_at: string | null; ended_at: string | null; retention: DatRetention; version: number;
 }
+
+/** An eSSL device of the company, with the import format an Admin assigned to it (if any). */
+export interface DatDevice { id: string; name: string; model: string | null; firmware: string | null; status: string; format_version: string | null; eligible: boolean }
+
+export const DAT_FORMAT = "essl.x2008.attlog/1";
 
 export interface DatCode {
   code: string; records: number; first: string; last: string; mapped: number; inactive: number; unmapped: number; undetermined: number;
@@ -229,9 +256,20 @@ export interface DatRow {
 
 export type RowFilter = "all" | "problems" | "duplicates" | "unmapped" | "code";
 
-export async function listBatches(sb: RpcClient): Promise<{ batches: DatBatch[]; limits: Record<string, unknown> }> {
+export async function listBatches(sb: RpcClient): Promise<{ batches: DatBatch[]; devices: DatDevice[]; limits: Record<string, unknown> }> {
   const r = await call(sb, "biometric_dat_batches", {});
-  return { batches: (r.batches as DatBatch[]) ?? [], limits: (r.limits as Record<string, unknown>) ?? {} };
+  return { batches: (r.batches as DatBatch[]) ?? [], devices: (r.devices as DatDevice[]) ?? [], limits: (r.limits as Record<string, unknown>) ?? {} };
+}
+
+/** Admin: assign (or, with null, remove) a device's import format. */
+export async function setDeviceFormat(sb: RpcClient, deviceId: string, format: string | null): Promise<string | null> {
+  const r = await call(sb, "biometric_dat_set_device_format", { p_device: deviceId, p_format: format });
+  return r.ok === true ? null : datErrorText(String(r.error));
+}
+
+/** Expiry and retention run lazily (no scheduler): the Biometric page asks for one bounded step when it opens. */
+export async function housekeeping(sb: RpcClient): Promise<void> {
+  await call(sb, "biometric_dat_housekeeping", {});
 }
 
 export async function loadCodes(sb: RpcClient, batchId: string): Promise<{ codes: DatCode[]; invalid_codes: number; totals: Record<string, number> }> {
@@ -269,7 +307,7 @@ export const STATE_TEXT: Record<DatState, string> = {
   ready_for_review: "Ready for review",
   reviewed: "Reviewed",
   failed: "Refused",
-  expired: "Expired (unfinished)",
+  expired: "Expired (data removed)",
   cancelled: "Cancelled",
   deleted: "Deleted",
 };

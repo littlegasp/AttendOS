@@ -1,44 +1,82 @@
 -- AttendOS 0013 — B5 offline DAT import, Stage 1 (versioned reader) and Stage 2 (mapping preview, import preparation).
+-- Revision 2 (23 Nov 2026): owner-approved correction pass after the technical review of e27ef9d — F1 batch table no
+-- longer directly readable; F2 duplicate labels materialised + ANALYZE after parsing; F3 continue processing; F4
+-- per-device format profile (X2008 only); F5 company lock around the open-batch limit; F6 chunk length checked before
+-- decoding; server-generated file names; HR prepares / Admin approves; retention with bounded lazy deletion.
+-- This migration has never been run on a hosted or company database; it is corrected in place for that reason.
 --
 -- What this migration does:
 --   * keeps an uploaded eSSL X2008 attendance export (USB `.dat` file) byte-for-byte;
---   * parses it on the server with the versioned profile `essl.x2008.attlog/1` (docs/biometric/BIOMETRIC_DAT_FORMAT.md);
+--   * parses it on the server with the versioned profile `essl.x2008.attlog/1` (docs/biometric/BIOMETRIC_DAT_FORMAT.md),
+--     only for devices an Admin has explicitly assigned that profile to (model X2008);
 --   * keeps every line as one row in file order — raw text, all six raw fields, exact timestamp string — including
 --     malformed, blank and duplicate lines;
---   * labels duplicates and shows, on read, which approved employee mapping applies to each record.
+--   * labels duplicates and shows, on read, which approved employee mapping applies to each record;
+--   * removes stored bytes and rows when a batch fails, is cancelled or deleted, or reaches its retention date.
 --
 -- What it never does:
 --   * writes attendance, sessions or register rows; creates biometric_raw_events; calls or triggers projection;
---   * infers IN/OUT or gives fields 3–6 any meaning; creates or guesses an employee mapping.
---   Staging tables only. Nothing here runs on a schedule; stale uploads expire lazily when an Admin uses the screen.
+--   * infers IN/OUT or gives fields 3–6 any meaning; creates or guesses an employee mapping;
+--   * stores the uploaded file name (it may contain the device serial) — the server names each batch itself.
+--   Staging tables only. Nothing runs on a schedule: expiry and retention happen lazily when HR or an Admin uses
+--   Biometric, in bounded steps. If nobody opens it, data can stay past its date until the next visit.
 --
--- Every function is Admin-only (biometric_require(true)) and limited to the caller's company. The new tables have row
--- level security on and no grants: they are reached only through these functions. The generic audit() trigger is NOT
--- attached to them (it copies whole rows into the append-only audit_log); explicit audit entries carry ids, counts and
--- hashes only — never file names, codes, times or line text.
+-- Who may do what (server-side; the screen only mirrors it):
+--   HR and Admin of the company: upload, process / continue and cancel their OWN uploads; list and read batches,
+--     records, duplicate labels and mapping previews.
+--   Admin only: mark reviewed, delete a batch, download the original file, cancel someone else's upload, assign a
+--     device's import format.
+--   Mappings keep their existing rules (device-specific: HR + Admin; company-wide: Admin) — unchanged here.
+-- The new tables have row level security on and no grants; the batch table's direct read grant from 0010 is removed.
+-- The generic audit() trigger is NOT attached (it copies whole rows into the append-only audit_log); explicit audit
+-- entries carry ids, counts and hashes only — never file names, codes, times or line text.
 
 -- ================================================================ limits (one place; the app reads them from the list call)
 create function public.biometric_dat_limits() returns jsonb
 language sql immutable as $$
   select jsonb_build_object(
     'format_version', 'essl.x2008.attlog/1',
+    'format_models', jsonb_build_array('X2008'),  -- the only model this profile was verified on
     'chunk_bytes', 262144,          -- 256 KiB of original bytes per upload call
+    'chunk_b64_max', 349528,        -- base64 length of a full chunk (4 * ceil(262144 / 3)); checked before decoding
     'max_file_bytes', 16777216,     -- 16 MiB
     'max_lines', 200000,
     'max_line_bytes', 512,
     'max_fields', 16,
     'expected_fields', 6,
-    'lines_per_call', 5000,         -- parse / classify work per call (well inside the 8 s signed-in timeout)
+    'lines_per_call', 5000,         -- parse / classify work per call (inside the 8 s signed-in timeout, measured)
     'max_blank_pct', 1,
     'max_malformed_pct', 2,
     'idle_hours', 24,               -- an upload with no new chunk for this long expires
     'stall_hours', 2,               -- processing with no progress for this long fails
-    'max_open_batches', 3)
+    'max_open_batches', 3,
+    'review_days', 30,              -- ready for review but not reviewed: file and rows removed after this
+    'reviewed_days', 90,            -- reviewed: file and rows removed this long after review
+    'tombstone_years', 3,           -- non-personal batch record kept this long after its data was removed
+    'purge_rows_per_call', 50000,   -- rows physically deleted per housekeeping call (bounded; measured)
+    'expire_batches_per_call', 10)
 $$;
+
+-- ================================================================ per-device import format (Admin-assigned)
+-- A device may import USB exports only after an Admin assigns it a verified format profile. Kept apart from
+-- biometric_devices so device rows (and their whole-row audit) are untouched.
+create table public.biometric_device_import_formats (
+  company_id uuid not null default public.my_company() references public.companies (id),
+  device_id uuid primary key,
+  format_version text not null check (format_version in ('essl.x2008.attlog/1')),
+  assigned_by uuid references public.employees (id),
+  assigned_at timestamptz not null default now(),
+  foreign key (company_id, device_id) references public.biometric_devices (company_id, id) on delete cascade
+);
+create trigger company_refs before insert or update on public.biometric_device_import_formats
+  for each row execute function public.check_company_refs('assigned_by:employees');
+create trigger freeze_company before update on public.biometric_device_import_formats for each row execute function public.freeze_company_id();
 
 -- ================================================================ batches: the 0010 table gains the upload/processing state
 alter table public.biometric_import_batches
   add column source_device_id uuid,
+  add column device_model text,
+  add column device_firmware text,
   add column declared_timezone text check (declared_timezone is null or public.valid_timezone(declared_timezone)),
   add column declared_size bigint check (declared_size is null or declared_size between 1 and 16777216),
   add column chunk_count int check (chunk_count is null or chunk_count between 1 and 64),
@@ -57,11 +95,14 @@ alter table public.biometric_import_batches
   add column fail_line int,
   add column counts jsonb not null default '{}',
   add column last_activity_at timestamptz not null default now(),
+  add column ready_at timestamptz,
   add column reviewed_by uuid references public.employees (id),
   add column reviewed_at timestamptz,
   add column deleted_by uuid references public.employees (id),
   add column deleted_at timestamptz,
   add column delete_reason text,
+  add column ended_at timestamptz,                -- when the batch reached failed/expired/cancelled/deleted
+  add column purge_pending boolean not null default false,  -- rows still being removed in bounded steps
   add column version int not null default 0,
   add constraint biometric_import_batches_source_device_fk foreign key (company_id, source_device_id)
     references public.biometric_devices (company_id, id),
@@ -72,11 +113,17 @@ alter table public.biometric_import_batches drop constraint biometric_import_bat
 create unique index biometric_import_batches_active_file on public.biometric_import_batches (company_id, file_sha256)
   where state not in ('failed', 'expired', 'cancelled', 'deleted');
 create index on public.biometric_import_batches (company_id, state, last_activity_at);
+create index on public.biometric_import_batches (company_id, purge_pending) where purge_pending;
 
 drop trigger company_refs on public.biometric_import_batches;
 create trigger company_refs before insert or update on public.biometric_import_batches
   for each row execute function public.check_company_refs('uploaded_by:employees', 'approved_by:employees', 'reviewed_by:employees',
                                                           'deleted_by:employees', 'source_device_id:biometric_devices');
+
+-- F1: the batch table now holds upload metadata (token hash, chunk hashes, deletion reasons). Its 0010 read grant and
+-- policy are removed; batches are read only through the checked functions below. Nothing in the app read it directly.
+drop policy bio_read on public.biometric_import_batches;
+revoke all on table public.biometric_import_batches from public, anon, authenticated;
 
 -- ================================================================ staging tables
 -- Chunks of an upload in progress; joined into the original at finish and then deleted.
@@ -142,7 +189,7 @@ create trigger freeze_company before update on public.biometric_import_rows for 
 do $$
 declare t text;
 begin
-  foreach t in array array['biometric_import_chunks', 'biometric_import_files', 'biometric_import_rows'] loop
+  foreach t in array array['biometric_import_chunks', 'biometric_import_files', 'biometric_import_rows', 'biometric_device_import_formats'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on table public.%I from public, anon, authenticated', t);
   end loop;
@@ -150,13 +197,22 @@ end $$;
 
 -- ================================================================ helpers (not callable by users)
 -- Audit entry with ids, counts and hashes only. Never a file name, code, time, line text or byte.
-create function public.biometric_dat_audit(cid uuid, act text, bid uuid, info jsonb) returns void
+create function public.biometric_dat_audit(cid uuid, act text, bid uuid, info jsonb, tgt text default 'biometric_import_batches') returns void
 language sql security definer set search_path = public as $$
   insert into public.audit_log (company_id, action, target, target_id, after)
-  values (cid, act, 'biometric_import_batches', bid::text,
+  values (cid, act, tgt, bid::text,
           (select coalesce(jsonb_object_agg(k, v), '{}') from jsonb_each(info) e(k, v)
-            where k in ('state', 'reason', 'line', 'size', 'sha256', 'chunk_count', 'lines', 'counts', 'source_device_id', 'format_version')))
+            where k in ('state', 'reason', 'line', 'size', 'sha256', 'chunk_count', 'lines', 'counts', 'source_device_id', 'format_version', 'rows_removed')))
 $$;
+
+-- The caller may act on a batch they did not upload only as an Admin.
+create function public.biometric_dat_owner_or_admin(b public.biometric_import_batches) returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if b.uploaded_by is distinct from public.my_employee_id() and not public.is_admin() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+end $$;
 
 -- Split one line by TAB and derive the code and the timestamp shape (profile essl.x2008.attlog/1). Immutable, no lookups.
 create function public.biometric_dat_split(l text)
@@ -200,33 +256,83 @@ begin
   end if;
 end $$;
 
--- Remove the stored bytes and rows of a batch (same transaction as its state change).
-create function public.biometric_dat_purge(bid uuid) returns void
-language sql security definer set search_path = public as $$
+-- Remove a batch's stored bytes at once and up to `budget` of its rows; returns the number of rows removed.
+-- purge_pending stays true until the last row is gone (later calls continue). The batch must already be in a state
+-- whose data no function serves (failed / expired / cancelled / deleted), so a half-removed batch is never readable.
+create function public.biometric_dat_purge(bid uuid, budget int) returns int
+language plpgsql security definer set search_path = public as $$
+declare n int := 0;
+begin
   delete from public.biometric_import_chunks where batch_id = bid;
   delete from public.biometric_import_files where batch_id = bid;
-  delete from public.biometric_import_rows where batch_id = bid;
-$$;
+  if budget > 0 then
+    with d as (delete from public.biometric_import_rows
+                where batch_id = bid and line_no in (select line_no from public.biometric_import_rows where batch_id = bid
+                                                      order by line_no desc limit budget)
+               returning 1)
+    select count(*) into n from d;
+  end if;
+  update public.biometric_import_batches
+     set purge_pending = exists (select 1 from public.biometric_import_rows where batch_id = bid)
+   where id = bid;
+  return n;
+end $$;
 
--- Lazy expiry (no scheduler): uploads idle 24 h expire; processing with no progress for 2 h fails. At most 10 per call.
-create function public.biometric_dat_expire(cid uuid) returns int
+-- End a batch (failed / expired / cancelled / deleted): token cleared, data unreadable at once, bytes removed now and
+-- rows within the given budget (the rest continues on later housekeeping calls).
+create function public.biometric_dat_end(bid uuid, new_state text, reason text, line int, budget int) returns int
 language plpgsql security definer set search_path = public as $$
-declare b record; n int := 0;
 begin
+  update public.biometric_import_batches
+     set state = new_state, fail_reason = coalesce(reason, fail_reason), fail_line = coalesce(line, fail_line), upload_token_hash = null,
+         ended_at = now(), purge_pending = true, last_activity_at = now(), updated_at = now(), version = version + 1
+   where id = bid;
+  return public.biometric_dat_purge(bid, budget);
+end $$;
+
+-- Lazy housekeeping (no scheduler), bounded per call:
+--   1. continue removing rows of ended batches (purge_pending) within the row budget;
+--   2. uploads idle 24 h expire; processing with no progress for 2 h fails; ready-for-review not reviewed in 30 days and
+--      reviewed batches 90 days after review expire (file and rows removed, tombstone kept);
+--   3. tombstones (no personal data) are removed 3 years after their data was removed.
+-- Runs on begin, status, the batch list and the Biometric page's housekeeping call — only when someone uses Biometric.
+create function public.biometric_dat_expire(cid uuid, row_budget int default null) returns int
+language plpgsql security definer set search_path = public as $$
+declare lim jsonb := public.biometric_dat_limits(); b record; n int := 0;
+        budget int := coalesce(row_budget, (lim ->> 'purge_rows_per_call')::int);
+        ns text; why text;
+begin
+  for b in select id from public.biometric_import_batches where company_id = cid and purge_pending
+            order by ended_at limit 5 for update skip locked loop
+    exit when budget <= 0;
+    budget := budget - public.biometric_dat_purge(b.id, budget);
+  end loop;
+
   for b in select id, state from public.biometric_import_batches
             where company_id = cid
-              and ((state = 'uploading' and last_activity_at < now() - interval '24 hours')
-                or (state in ('uploaded', 'parsing', 'classifying') and last_activity_at < now() - interval '2 hours'))
-            order by last_activity_at limit 10 for update skip locked loop
-    perform public.biometric_dat_purge(b.id);
-    if b.state = 'uploading' then
-      update public.biometric_import_batches set state = 'expired', fail_reason = 'upload_idle', upload_token_hash = null, updated_at = now() where id = b.id;
-      perform public.biometric_dat_audit(cid, 'dat_import.expired', b.id, jsonb_build_object('state', 'expired', 'reason', 'upload_idle'));
-    else
-      update public.biometric_import_batches set state = 'failed', fail_reason = 'processing_stalled', upload_token_hash = null, updated_at = now() where id = b.id;
-      perform public.biometric_dat_audit(cid, 'dat_import.failed', b.id, jsonb_build_object('state', 'failed', 'reason', 'processing_stalled'));
+              and ((state = 'uploading' and last_activity_at < now() - make_interval(hours => (lim ->> 'idle_hours')::int))
+                or (state in ('uploaded', 'parsing', 'classifying') and last_activity_at < now() - make_interval(hours => (lim ->> 'stall_hours')::int))
+                or (state = 'ready_for_review' and ready_at < now() - make_interval(days => (lim ->> 'review_days')::int))
+                or (state = 'reviewed' and reviewed_at < now() - make_interval(days => (lim ->> 'reviewed_days')::int)))
+            order by last_activity_at limit (lim ->> 'expire_batches_per_call')::int for update skip locked loop
+    if b.state = 'uploading' then ns := 'expired'; why := 'upload_idle';
+    elsif b.state in ('uploaded', 'parsing', 'classifying') then ns := 'failed'; why := 'processing_stalled';
+    elsif b.state = 'ready_for_review' then ns := 'expired'; why := 'review_timeout';
+    else ns := 'expired'; why := 'retention_period';
     end if;
+    budget := budget - public.biometric_dat_end(b.id, ns, why, null, greatest(budget, 0));
+    perform public.biometric_dat_audit(cid, 'dat_import.' || ns, b.id, jsonb_build_object('state', ns, 'reason', why));
     n := n + 1;
+  end loop;
+
+  for b in select id from public.biometric_import_batches bb
+            where company_id = cid and state in ('failed', 'expired', 'cancelled', 'deleted') and not purge_pending
+              and ended_at < now() - make_interval(years => (lim ->> 'tombstone_years')::int)
+              and not exists (select 1 from public.biometric_raw_events r where r.import_batch_id = bb.id)
+              and not exists (select 1 from public.attendance_events a where a.import_batch_id = bb.id)
+            limit 50 for update skip locked loop
+    delete from public.biometric_import_batches where id = b.id;
+    perform public.biometric_dat_audit(cid, 'dat_import.tombstone_removed', b.id, '{}'::jsonb);
   end loop;
   return n;
 end $$;
@@ -244,9 +350,7 @@ end $$;
 create function public.biometric_dat_fail(b public.biometric_import_batches, reason text, line int) returns jsonb
 language plpgsql security definer set search_path = public as $$
 begin
-  perform public.biometric_dat_purge(b.id);
-  update public.biometric_import_batches set state = 'failed', fail_reason = reason, fail_line = line, upload_token_hash = null,
-         last_activity_at = now(), updated_at = now(), version = version + 1 where id = b.id;
+  perform public.biometric_dat_end(b.id, 'failed', reason, line, (public.biometric_dat_limits() ->> 'purge_rows_per_call')::int);
   perform public.biometric_dat_audit(b.company_id, 'dat_import.failed', b.id, jsonb_build_object('state', 'failed', 'reason', reason, 'line', line));
   return jsonb_build_object('ok', false, 'state', 'failed', 'error', reason, 'line', line);
 end $$;
@@ -254,19 +358,56 @@ end $$;
 create function public.biometric_dat_hex(h bytea[]) returns text[]
 language sql immutable as $$ select array(select encode(x, 'hex') from unnest(h) with ordinality u(x, i) order by i) $$;
 
+-- Server-generated batch name: model, a short device reference (never the device name or serial), the upload time in
+-- the declared zone and the start of the file's SHA-256, e.g. x2008-1a2b3c4d-20261123-1605-6f011536.dat
+create function public.biometric_dat_name(model text, device uuid, tz text, at timestamptz, h bytea) returns text
+language sql stable set search_path = public as $$
+  select left(coalesce(nullif(trim(both '-' from lower(regexp_replace(coalesce(model, ''), '[^A-Za-z0-9]+', '-', 'g'))), ''), 'device'), 20)
+         || '-' || left(replace(device::text, '-', ''), 8) || '-' || to_char(at at time zone tz, 'YYYYMMDD-HH24MI')
+         || '-' || left(encode(h, 'hex'), 8) || '.dat'
+$$;
+
+-- ================================================================ device import format (Admin)
+create function public.biometric_dat_set_device_format(p_device uuid, p_format text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare cid uuid := public.biometric_require(true); lim jsonb := public.biometric_dat_limits(); dev public.biometric_devices;
+begin
+  select * into dev from public.biometric_devices where id = p_device and company_id = cid;
+  if not found then return jsonb_build_object('ok', false, 'error', 'device_not_found'); end if;
+  if p_format is null then
+    delete from public.biometric_device_import_formats where device_id = dev.id;
+    perform public.biometric_dat_audit(cid, 'dat_import.device_format_removed', dev.id, '{}'::jsonb, 'biometric_devices');
+    return jsonb_build_object('ok', true, 'format_version', null);
+  end if;
+  if p_format <> lim ->> 'format_version' then return jsonb_build_object('ok', false, 'error', 'unknown_format'); end if;
+  if dev.manufacturer <> 'essl' or upper(btrim(coalesce(dev.model, ''))) not in (select jsonb_array_elements_text(lim -> 'format_models')) then
+    return jsonb_build_object('ok', false, 'error', 'model_not_supported');
+  end if;
+  insert into public.biometric_device_import_formats (company_id, device_id, format_version, assigned_by)
+  values (cid, dev.id, p_format, public.my_employee_id())
+  on conflict (device_id) do update set format_version = excluded.format_version, assigned_by = excluded.assigned_by, assigned_at = now();
+  perform public.biometric_dat_audit(cid, 'dat_import.device_format_assigned', dev.id, jsonb_build_object('format_version', p_format), 'biometric_devices');
+  return jsonb_build_object('ok', true, 'format_version', p_format);
+end $$;
+
 -- ================================================================ upload
-create function public.biometric_dat_begin(p_device uuid, p_timezone text, p_file_name text, p_size bigint, p_sha256 text, p_chunk_hashes text[])
+create function public.biometric_dat_begin(p_device uuid, p_timezone text, p_size bigint, p_sha256 text, p_chunk_hashes text[])
 returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); lim jsonb := public.biometric_dat_limits(); me uuid := public.my_employee_id();
-        dev public.biometric_devices; h bytea; hashes bytea[]; existing record; token text; bid uuid; nchunks int;
+declare cid uuid := public.biometric_require(false); lim jsonb := public.biometric_dat_limits(); me uuid := public.my_employee_id();
+        dev public.biometric_devices; fmt text; h bytea; hashes bytea[]; existing record; token text; bid uuid; nchunks int;
 begin
+  -- F5: one begin at a time per company, so the open-batch count below cannot be outrun by a simultaneous start
+  perform pg_advisory_xact_lock(hashtextextended('attendos.biometric_dat_begin:' || cid::text, 0));
   perform public.biometric_dat_expire(cid);
   select * into dev from public.biometric_devices where id = p_device and company_id = cid;
   if not found then return jsonb_build_object('ok', false, 'error', 'device_not_found'); end if;
-  if dev.manufacturer <> 'essl' then return jsonb_build_object('ok', false, 'error', 'device_not_essl'); end if;
+  select format_version into fmt from public.biometric_device_import_formats where device_id = dev.id and company_id = cid;
+  if fmt is null then return jsonb_build_object('ok', false, 'error', 'no_import_format'); end if;
+  if dev.manufacturer <> 'essl' or upper(btrim(coalesce(dev.model, ''))) not in (select jsonb_array_elements_text(lim -> 'format_models')) then
+    return jsonb_build_object('ok', false, 'error', 'model_not_supported');
+  end if;
   if p_timezone is null or not public.valid_timezone(p_timezone) then return jsonb_build_object('ok', false, 'error', 'invalid_timezone'); end if;
-  if p_file_name is null or length(p_file_name) not between 1 and 200 then return jsonb_build_object('ok', false, 'error', 'invalid_file_name'); end if;
   if p_size is null or p_size < 1 then return jsonb_build_object('ok', false, 'error', 'empty_file'); end if;
   if p_size > (lim ->> 'max_file_bytes')::bigint then return jsonb_build_object('ok', false, 'error', 'file_too_large'); end if;
   if p_sha256 is null or p_sha256 !~ '^[0-9a-f]{64}$' then return jsonb_build_object('ok', false, 'error', 'invalid_sha256'); end if;
@@ -286,6 +427,10 @@ begin
       return jsonb_build_object('ok', false, 'error', 'resume_available', 'batch_id', existing.id);
     elsif existing.state = 'uploading' then
       return jsonb_build_object('ok', false, 'error', 'being_uploaded', 'by', existing.full_name);
+    elsif existing.state in ('uploaded', 'parsing', 'classifying') and existing.uploaded_by = me then
+      return jsonb_build_object('ok', false, 'error', 'continue_processing', 'batch_id', existing.id);
+    elsif existing.state in ('uploaded', 'parsing', 'classifying') then
+      return jsonb_build_object('ok', false, 'error', 'being_processed', 'by', existing.full_name);
     else
       return jsonb_build_object('ok', false, 'error', 'already_imported', 'batch_id', existing.id, 'at', existing.created_at);
     end if;
@@ -297,22 +442,23 @@ begin
 
   token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
   begin
-    insert into public.biometric_import_batches (company_id, file_name, file_sha256, uploaded_by, source_device_id, declared_timezone,
-                                                 declared_size, chunk_count, chunk_hashes, format_version, upload_token_hash, state)
-    values (cid, p_file_name, h, me, dev.id, p_timezone, p_size, nchunks, hashes, lim ->> 'format_version',
-            sha256(convert_to(token, 'UTF8')), 'uploading')
+    insert into public.biometric_import_batches (company_id, file_name, file_sha256, uploaded_by, source_device_id, device_model, device_firmware,
+                                                 declared_timezone, declared_size, chunk_count, chunk_hashes, format_version, upload_token_hash, state)
+    values (cid, public.biometric_dat_name(dev.model, dev.id, p_timezone, now(), h), h, me, dev.id, dev.model, dev.firmware_version,
+            p_timezone, p_size, nchunks, hashes, fmt, sha256(convert_to(token, 'UTF8')), 'uploading')
     returning id into bid;
   exception when unique_violation then
     return jsonb_build_object('ok', false, 'error', 'being_uploaded');
   end;
   perform public.biometric_dat_audit(cid, 'dat_import.begin', bid, jsonb_build_object('state', 'uploading', 'size', p_size, 'sha256', p_sha256,
-                                     'chunk_count', nchunks, 'source_device_id', dev.id, 'format_version', lim ->> 'format_version'));
-  return jsonb_build_object('ok', true, 'batch_id', bid, 'upload_token', token, 'next_index', 0, 'chunk_bytes', lim -> 'chunk_bytes');
+                                     'chunk_count', nchunks, 'source_device_id', dev.id, 'format_version', fmt));
+  return jsonb_build_object('ok', true, 'batch_id', bid, 'upload_token', token, 'next_index', 0, 'chunk_bytes', lim -> 'chunk_bytes',
+                            'file_name', (select file_name from public.biometric_import_batches where id = bid));
 end $$;
 
 create function public.biometric_dat_chunk(p_batch uuid, p_token text, p_index int, p_data text) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); lim jsonb := public.biometric_dat_limits(); b public.biometric_import_batches;
+declare cid uuid := public.biometric_require(false); lim jsonb := public.biometric_dat_limits(); b public.biometric_import_batches;
         bytes bytea; hh bytea; expected int; stored bytea; cb int := (lim ->> 'chunk_bytes')::int;
 begin
   b := public.biometric_dat_lock(cid, p_batch);
@@ -322,6 +468,10 @@ begin
     return jsonb_build_object('ok', false, 'error', 'taken_over');
   end if;
   if p_index is null or p_index < 0 or p_index >= b.chunk_count then return jsonb_build_object('ok', false, 'error', 'invalid_index'); end if;
+  -- F6: the encoded payload's length is checked before any decoding work
+  if p_data is null or length(p_data) = 0 or length(p_data) > (lim ->> 'chunk_b64_max')::int then
+    return jsonb_build_object('ok', false, 'error', 'invalid_chunk_data');
+  end if;
   begin bytes := decode(p_data, 'base64');
   exception when others then return jsonb_build_object('ok', false, 'error', 'invalid_chunk_data'); end;
   hh := sha256(bytes);
@@ -343,7 +493,7 @@ end $$;
 -- The uploader takes the upload over (new browser tab, refresh): a new token; chunks already received are kept.
 create function public.biometric_dat_resume(p_batch uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); b public.biometric_import_batches; token text;
+declare cid uuid := public.biometric_require(false); b public.biometric_import_batches; token text;
 begin
   b := public.biometric_dat_lock(cid, p_batch);
   if b.state <> 'uploading' then return jsonb_build_object('ok', false, 'error', 'not_uploading', 'state', b.state); end if;
@@ -357,7 +507,7 @@ end $$;
 
 create function public.biometric_dat_finish(p_batch uuid, p_token text) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); b public.biometric_import_batches; whole bytea;
+declare cid uuid := public.biometric_require(false); b public.biometric_import_batches; whole bytea;
 begin
   b := public.biometric_dat_lock(cid, p_batch);
   if b.state <> 'uploading' then return jsonb_build_object('ok', false, 'error', 'not_uploading', 'state', b.state); end if;
@@ -393,6 +543,8 @@ begin
   lines := string_to_array(case when final_crlf then left(t, -2) else t end, E'\r\n');
 end $$;
 
+-- Line endings: CRLF only (profile essl.x2008.attlog/1, as observed). A file with any bare LF or CR is refused as
+-- unexpected_line_endings; LF-only files are not accepted unless a later profile version specifies and tests them.
 create function public.biometric_dat_validate(b public.biometric_import_batches) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare lim jsonb := public.biometric_dat_limits(); raw bytea; t text; n_lf int; n_cr int; n_crlf int; lines text[]; final_crlf boolean;
@@ -488,6 +640,8 @@ begin
          version = version + 1 where id = b.id;
   if to_line >= b.line_count then
     update public.biometric_import_batches set progress_line = 0 where id = b.id;
+    -- F2: the rows were inserted seconds ago; give the planner real statistics before the duplicate look-ups
+    analyze public.biometric_import_rows;
     return jsonb_build_object('ok', true, 'state', 'classifying', 'progress_line', 0, 'lines', b.line_count);
   end if;
   return jsonb_build_object('ok', true, 'state', 'parsing', 'progress_line', to_line, 'lines', b.line_count);
@@ -495,16 +649,15 @@ end $$;
 
 -- Duplicate labels (first match wins): exact_in_file → exact_in_earlier_import → same_code_time_other_fields →
 -- already_from_device → new. Every row stays; a label points at the earlier evidence.
+-- F2: the labels for this slice are computed once into a materialised result, then written by line number, so the
+-- look-ups can never be re-evaluated per updated row whatever plan the statistics produce.
 create function public.biometric_dat_classify(b public.biometric_import_batches) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare lim jsonb := public.biometric_dat_limits(); from_line int := b.progress_line + 1;
         to_line int := least(b.line_count, b.progress_line + (lim ->> 'lines_per_call')::int);
 begin
-  update public.biometric_import_rows r set
-         dup_class = c.cls, dup_ref_batch = c.ref_batch, dup_ref_line = c.ref_line, dup_ref_raw_event = c.ref_raw,
-         flags = case when c.out_of_order and not ('out_of_order' = any (r.flags)) then r.flags || 'out_of_order'::text else r.flags end
-    from (
-      select r2.batch_id, r2.line_no,
+  with c as materialized (
+      select r2.line_no,
              case when r2.parse_status = 'blank' then null
                   when f.line_no is not null then 'exact_in_file'
                   when e.batch_id is not null then 'exact_in_earlier_import'
@@ -544,16 +697,19 @@ begin
         left join lateral (select x.local_ts from public.biometric_import_rows x
                             where x.batch_id = r2.batch_id and x.line_no < r2.line_no and x.local_ts is not null
                             order by x.line_no desc limit 1) prev on true
-       where r2.batch_id = b.id and r2.line_no between from_line and to_line
-    ) c
-   where r.batch_id = c.batch_id and r.line_no = c.line_no;
+       where r2.batch_id = b.id and r2.line_no between from_line and to_line)
+  update public.biometric_import_rows r set
+         dup_class = c.cls, dup_ref_batch = c.ref_batch, dup_ref_line = c.ref_line, dup_ref_raw_event = c.ref_raw,
+         flags = case when c.out_of_order and not ('out_of_order' = any (r.flags)) then r.flags || 'out_of_order'::text else r.flags end
+    from c
+   where r.batch_id = b.id and r.line_no = c.line_no;
 
   if to_line < b.line_count then
     update public.biometric_import_batches set progress_line = to_line, last_activity_at = now(), updated_at = now(), version = version + 1 where id = b.id;
     return jsonb_build_object('ok', true, 'state', 'classifying', 'progress_line', to_line, 'lines', b.line_count);
   end if;
   update public.biometric_import_batches set state = 'ready_for_review', progress_line = b.line_count, last_activity_at = now(), updated_at = now(),
-         rows = b.line_count, version = version + 1,
+         ready_at = now(), rows = b.line_count, version = version + 1,
          counts = (select jsonb_build_object(
                      'lines', count(*),
                      'ok', count(*) filter (where parse_status = 'ok'),
@@ -577,12 +733,16 @@ begin
   return jsonb_build_object('ok', true, 'state', 'ready_for_review', 'progress_line', b.line_count, 'lines', b.line_count);
 end $$;
 
--- One unit of work. The client calls it until the state is ready_for_review or failed.
+-- One unit of work, by the person who uploaded the file (HR or Admin). The client calls it until the state is
+-- ready_for_review or failed; "Continue processing" on the screen calls the same function after an interruption.
 create function public.biometric_dat_process(p_batch uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); b public.biometric_import_batches;
+declare cid uuid := public.biometric_require(false); b public.biometric_import_batches;
 begin
   b := public.biometric_dat_lock(cid, p_batch);
+  if b.state in ('uploaded', 'parsing', 'classifying') and b.uploaded_by is distinct from public.my_employee_id() then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
   if b.state = 'uploaded' then return public.biometric_dat_validate(b);
   elsif b.state = 'parsing' then return public.biometric_dat_parse(b);
   elsif b.state = 'classifying' then return public.biometric_dat_classify(b);
@@ -590,10 +750,23 @@ begin
   return jsonb_build_object('ok', b.state in ('ready_for_review', 'reviewed'), 'state', b.state, 'error', b.fail_reason, 'line', b.fail_line);
 end $$;
 
--- ================================================================ reading
+-- ================================================================ reading (HR and Admin)
+-- Retention dates shown on screen: when the file and rows will be removed, and when the remaining (non-personal)
+-- record will be removed. Removal happens on the first housekeeping call after that date, not exactly at it.
+create function public.biometric_dat_retention(b public.biometric_import_batches) returns jsonb
+language sql stable set search_path = public as $$
+  select jsonb_build_object(
+    'data_until', case when b.state = 'ready_for_review' then b.ready_at + make_interval(days => (l ->> 'review_days')::int)
+                       when b.state = 'reviewed' then b.reviewed_at + make_interval(days => (l ->> 'reviewed_days')::int) end,
+    'record_until', case when b.state in ('failed', 'expired', 'cancelled', 'deleted') and b.ended_at is not null
+                         then b.ended_at + make_interval(years => (l ->> 'tombstone_years')::int) end,
+    'removing', b.purge_pending)
+    from (select public.biometric_dat_limits() l) x
+$$;
+
 create function public.biometric_dat_status(p_batch uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); b public.biometric_import_batches;
+declare cid uuid := public.biometric_require(false); b public.biometric_import_batches;
 begin
   perform public.biometric_dat_expire(cid);
   select * into b from public.biometric_import_batches where id = p_batch and company_id = cid and state <> 'legacy';
@@ -602,28 +775,44 @@ begin
     'received', (select coalesce(jsonb_agg(encode(sha256, 'hex') order by idx), '[]') from public.biometric_import_chunks where batch_id = b.id),
     'declared_sha256', encode(b.file_sha256, 'hex'), 'declared_size', b.declared_size, 'progress_line', b.progress_line,
     'lines', b.line_count, 'fail_reason', b.fail_reason, 'fail_line', b.fail_line, 'counts', b.counts, 'version', b.version,
-    'mine', b.uploaded_by = public.my_employee_id());
+    'mine', b.uploaded_by = public.my_employee_id(), 'retention', public.biometric_dat_retention(b));
 end $$;
 
 create function public.biometric_dat_batches() returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true);
+declare cid uuid := public.biometric_require(false); lim jsonb := public.biometric_dat_limits();
 begin
   perform public.biometric_dat_expire(cid);
-  return jsonb_build_object('limits', public.biometric_dat_limits(), 'batches', (
+  return jsonb_build_object('limits', lim,
+    'devices', (select coalesce(jsonb_agg(jsonb_build_object('id', d.id, 'name', d.name, 'model', d.model, 'firmware', d.firmware_version,
+                  'status', d.status, 'format_version', f.format_version,
+                  'eligible', upper(btrim(coalesce(d.model, ''))) in (select jsonb_array_elements_text(lim -> 'format_models'))) order by d.name), '[]')
+                  from public.biometric_devices d left join public.biometric_device_import_formats f on f.device_id = d.id
+                 where d.company_id = cid and d.manufacturer = 'essl'),
+    'batches', (
     select coalesce(jsonb_agg(jsonb_build_object(
       'id', b.id, 'state', b.state, 'file_name', b.file_name, 'size', b.declared_size, 'sha256', encode(b.file_sha256, 'hex'),
-      'source_device_id', b.source_device_id, 'device_name', d.name, 'timezone', b.declared_timezone, 'format_version', b.format_version,
+      'source_device_id', b.source_device_id, 'device_name', d.name, 'device_model', b.device_model, 'device_firmware', b.device_firmware,
+      'timezone', b.declared_timezone, 'format_version', b.format_version,
       'lines', b.line_count, 'counts', b.counts, 'next_index', b.next_chunk, 'chunk_count', b.chunk_count, 'progress_line', b.progress_line,
       'fail_reason', b.fail_reason, 'fail_line', b.fail_line, 'bom', b.bom, 'final_terminator', b.final_terminator,
       'uploaded_by', e.full_name, 'mine', b.uploaded_by = public.my_employee_id(), 'created_at', b.created_at,
-      'last_activity_at', b.last_activity_at, 'reviewed_by', r.full_name, 'reviewed_at', b.reviewed_at,
-      'deleted_at', b.deleted_at, 'delete_reason', b.delete_reason, 'version', b.version) order by b.created_at desc), '[]')
+      'last_activity_at', b.last_activity_at, 'ready_at', b.ready_at, 'reviewed_by', r.full_name, 'reviewed_at', b.reviewed_at,
+      'deleted_at', b.deleted_at, 'ended_at', b.ended_at, 'retention', public.biometric_dat_retention(b), 'version', b.version)
+      order by b.created_at desc), '[]')
       from public.biometric_import_batches b
       left join public.biometric_devices d on d.id = b.source_device_id
       left join public.employees e on e.id = b.uploaded_by
       left join public.employees r on r.id = b.reviewed_by
      where b.company_id = cid and b.state <> 'legacy'));
+end $$;
+
+-- Bounded housekeeping for the Biometric page (HR and Admin): runs the lazy expiry and retention steps.
+create function public.biometric_dat_housekeeping() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare cid uuid := public.biometric_require(false);
+begin
+  return jsonb_build_object('ok', true, 'expired', public.biometric_dat_expire(cid));
 end $$;
 
 -- Mapping applied to each row, computed on read with the same rules as biometric_resolve_mapping: a device mapping of
@@ -652,7 +841,7 @@ $$;
 
 create function public.biometric_dat_codes(p_batch uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); out jsonb;
+declare cid uuid := public.biometric_require(false); out jsonb;
 begin
   if not exists (select 1 from public.biometric_import_batches where id = p_batch and company_id = cid and state in ('ready_for_review', 'reviewed')) then
     raise exception 'Import batch not found or not ready for review' using errcode = 'P0002';
@@ -690,7 +879,7 @@ end $$;
 -- Paged rows. Filters: all, problems (unparsable, blank, time or code issues, flags), duplicates, unmapped, code:<exact>.
 create function public.biometric_dat_rows(p_batch uuid, p_filter text, p_code text, p_offset int, p_limit int) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); lim int := least(greatest(coalesce(p_limit, 100), 1), 500);
+declare cid uuid := public.biometric_require(false); lim int := least(greatest(coalesce(p_limit, 100), 1), 500);
 begin
   if not exists (select 1 from public.biometric_import_batches where id = p_batch and company_id = cid and state in ('ready_for_review', 'reviewed')) then
     raise exception 'Import batch not found or not ready for review' using errcode = 'P0002';
@@ -722,7 +911,7 @@ begin
   );
 end $$;
 
--- ================================================================ review, cancel, delete, download
+-- ================================================================ review (Admin), cancel (own, or Admin), delete and download (Admin)
 create function public.biometric_dat_mark_reviewed(p_batch uuid, p_version int) returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare cid uuid := public.biometric_require(true); b public.biometric_import_batches;
@@ -738,35 +927,33 @@ end $$;
 
 create function public.biometric_dat_cancel(p_batch uuid) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); b public.biometric_import_batches;
+declare cid uuid := public.biometric_require(false); b public.biometric_import_batches; n int;
 begin
   b := public.biometric_dat_lock(cid, p_batch);
+  perform public.biometric_dat_owner_or_admin(b);
   if b.state not in ('uploading', 'uploaded', 'parsing', 'classifying') then
     return jsonb_build_object('ok', false, 'error', 'not_in_progress', 'state', b.state);
   end if;
-  perform public.biometric_dat_purge(b.id);
-  update public.biometric_import_batches set state = 'cancelled', upload_token_hash = null, last_activity_at = now(), updated_at = now(),
-         version = version + 1 where id = b.id;
-  perform public.biometric_dat_audit(cid, 'dat_import.cancelled', b.id, jsonb_build_object('state', 'cancelled'));
+  n := public.biometric_dat_end(b.id, 'cancelled', null, null, (public.biometric_dat_limits() ->> 'purge_rows_per_call')::int);
+  perform public.biometric_dat_audit(cid, 'dat_import.cancelled', b.id, jsonb_build_object('state', 'cancelled', 'rows_removed', n));
   return jsonb_build_object('ok', true, 'state', 'cancelled');
 end $$;
 
--- Delete a finished or ended batch: bytes and rows go, the batch stays as a tombstone (counts, hash, who, when, why);
--- the file name is removed because it may contain the device serial. Audit history is never touched.
+-- Delete a finished or ended batch: it stops being readable at once; bytes go now and rows in bounded steps; the
+-- batch stays as a tombstone (generated name, counts, hash, who, when, why) until its record retention ends.
 create function public.biometric_dat_delete(p_batch uuid, p_reason text) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare cid uuid := public.biometric_require(true); b public.biometric_import_batches;
+declare cid uuid := public.biometric_require(true); b public.biometric_import_batches; n int;
 begin
+  b := public.biometric_dat_lock(cid, p_batch);   -- another company's batch: "not found" before anything else is checked
   if p_reason is null or length(trim(p_reason)) < 5 then return jsonb_build_object('ok', false, 'error', 'reason_required'); end if;
-  b := public.biometric_dat_lock(cid, p_batch);
   if b.state not in ('ready_for_review', 'reviewed', 'failed', 'expired', 'cancelled') then
     return jsonb_build_object('ok', false, 'error', 'cannot_delete', 'state', b.state);
   end if;
-  perform public.biometric_dat_purge(b.id);
-  update public.biometric_import_batches set state = 'deleted', file_name = 'deleted', deleted_by = public.my_employee_id(), deleted_at = now(),
-         delete_reason = trim(p_reason), upload_token_hash = null, updated_at = now(), version = version + 1 where id = b.id;
-  perform public.biometric_dat_audit(cid, 'dat_import.deleted', b.id, jsonb_build_object('state', 'deleted', 'reason', 'admin_delete'));
-  return jsonb_build_object('ok', true, 'state', 'deleted');
+  update public.biometric_import_batches set deleted_by = public.my_employee_id(), deleted_at = now(), delete_reason = trim(p_reason) where id = b.id;
+  n := public.biometric_dat_end(b.id, 'deleted', null, null, (public.biometric_dat_limits() ->> 'purge_rows_per_call')::int);
+  perform public.biometric_dat_audit(cid, 'dat_import.deleted', b.id, jsonb_build_object('state', 'deleted', 'reason', 'admin_delete', 'rows_removed', n));
+  return jsonb_build_object('ok', true, 'state', 'deleted', 'removing', (select purge_pending from public.biometric_import_batches where id = b.id));
 end $$;
 
 create function public.biometric_dat_download(p_batch uuid) returns jsonb
@@ -775,13 +962,16 @@ declare cid uuid := public.biometric_require(true); b public.biometric_import_ba
 begin
   select * into b from public.biometric_import_batches where id = p_batch and company_id = cid and state <> 'legacy';
   if not found then raise exception 'Import batch not found' using errcode = 'P0002'; end if;
+  if b.state not in ('uploaded', 'parsing', 'classifying', 'ready_for_review', 'reviewed') then
+    return jsonb_build_object('ok', false, 'error', 'no_file');
+  end if;
   select original into raw from public.biometric_import_files where batch_id = b.id;
   if raw is null then return jsonb_build_object('ok', false, 'error', 'no_file'); end if;
   perform public.biometric_dat_audit(cid, 'dat_import.downloaded', b.id, jsonb_build_object('size', octet_length(raw), 'sha256', encode(sha256(raw), 'hex')));
   return jsonb_build_object('ok', true, 'file_name', b.file_name, 'sha256', encode(sha256(raw), 'hex'), 'data', replace(encode(raw, 'base64'), E'\n', ''));
 end $$;
 
--- ================================================================ grants: nothing for PUBLIC or anon; Admin functions for signed-in users
+-- ================================================================ grants: nothing for PUBLIC or anon; checked functions for signed-in users
 do $$
 declare f record;
 begin
@@ -790,8 +980,11 @@ begin
     execute format('revoke all on function %s from public, anon, authenticated', f.sig);
   end loop;
 end $$;
-grant execute on function public.biometric_dat_begin(uuid, text, text, bigint, text, text[]), public.biometric_dat_chunk(uuid, text, int, text),
+-- HR and Admin (biometric_require(false)); ownership checked inside where it applies
+grant execute on function public.biometric_dat_begin(uuid, text, bigint, text, text[]), public.biometric_dat_chunk(uuid, text, int, text),
   public.biometric_dat_resume(uuid), public.biometric_dat_finish(uuid, text), public.biometric_dat_process(uuid),
   public.biometric_dat_status(uuid), public.biometric_dat_batches(), public.biometric_dat_codes(uuid),
-  public.biometric_dat_rows(uuid, text, text, int, int), public.biometric_dat_mark_reviewed(uuid, int), public.biometric_dat_cancel(uuid),
-  public.biometric_dat_delete(uuid, text), public.biometric_dat_download(uuid) to authenticated;
+  public.biometric_dat_rows(uuid, text, text, int, int), public.biometric_dat_cancel(uuid), public.biometric_dat_housekeeping() to authenticated;
+-- Admin only (biometric_require(true))
+grant execute on function public.biometric_dat_mark_reviewed(uuid, int), public.biometric_dat_delete(uuid, text), public.biometric_dat_download(uuid),
+  public.biometric_dat_set_device_format(uuid, text) to authenticated;

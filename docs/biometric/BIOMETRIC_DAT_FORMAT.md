@@ -67,10 +67,13 @@ produce the same total. It is confirmed only when the parser records each line's
 
 ## 3. Record structure
 
-Example as observed (TAB shown as `→`, CRLF as `␍␊`):
+Example in the observed shape (TAB shown as `→`, CRLF as `␍␊`). **Fully synthetic**: the code, date and time are
+invented, and this is not a line of the supplied export. (Until 23 Nov 2026 this section quoted line 1 of the real
+export, another employee's record. It was replaced in the correction pass; earlier commits still contain it, and Git
+history is deliberately not rewritten.)
 
 ```
-········7→2026-11-02 08:41:33→1→255→1→0␍␊
+········7→2030-01-02 08:15:00→1→255→1→0␍␊
 ```
 
 | Field | Observed content | Meaning | Parser rule |
@@ -273,11 +276,21 @@ A mismatch is reported to the owner, not "fixed".
 
 ---
 
-## 8.3 Implementation status (23 Nov 2026)
+## 8.3 Implementation status (23 Nov 2026, correction pass)
 
 Implemented locally as profile `essl.x2008.attlog/1`:
 - migration `supabase/migrations/0013_biometric_dat_import.sql`, local only and not applied to any hosted database;
-- the Admin screen *Biometric Devices → File import*.
+- the screen *Biometric Devices → File import* (HR and Admin prepare imports; an Admin approves).
+
+What the implemented reader accepts — and nothing more:
+- **Line endings: CRLF only.** Every line must end in CRLF (the last line may have no ending). A file with any bare LF
+  or bare CR is refused as `unexpected_line_endings` and nothing is kept. LF-only files are **not** accepted; that would
+  need a separate specification, tests and a new profile version.
+- **Devices: X2008 only.** An Admin assigns the profile to each device; only eSSL devices of model X2008 can receive it,
+  and the model is checked again at every import. No other eSSL model, firmware or export menu is claimed.
+- The batch records the device's model and firmware and the profile used.
+- Code rule broader than observed: letters, `_` and `-` up to 32 characters are accepted as codes (the export showed
+  digits only, at most 2 characters). Those cases are tested only with synthetic fixtures.
 
 All P-tests above, the real-file check (R0–R17) and the upload, security, mapping, time, duplicate, deletion and audit
 tests run in `supabase/tests/biometric_dat_import_test.sql` (see BIOMETRIC_B5_DAT_IMPORT_REPORT.md).
@@ -288,7 +301,7 @@ tests run in `supabase/tests/biometric_dat_import_test.sql` (see BIOMETRIC_B5_DA
 |---|---|
 | Rev 3 §2.2 | "USB attendance export" and "original DAT format" are now **observed for one supplied file**. All other X2008 capabilities are still unverified |
 | Rev 3 §4.3 | the pending format record is this document |
-| Rev 4 §3.2 | line endings: CRLF is the observed profile; LF-only or mixed files are refused unless the owner decides otherwise |
+| Rev 4 §3.2 | line endings: CRLF only (the observed profile, and what the reader implements); LF-only or mixed files are refused unless the owner separately specifies and tests them |
 | Rev 4 §3.3 | header: none; delimiter: TAB; field count: 6 (other counts are malformed rows) |
 | Rev 4 §3.4 / §5.1 | adds `raw_code_field` and the leading-space extraction rule (§4); `employee_code` is the extracted value; trailing or inner spaces remain `code_invalid` |
 | Rev 4 T-FM8 | ` 10` (leading space) now extracts to `10`; `10 ` (trailing) stays `code_invalid` — see P18 |

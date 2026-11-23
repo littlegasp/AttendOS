@@ -1,6 +1,6 @@
 # B5 DAT import Stages 1–2: post-implementation technical review
 
-Status: **review only, awaiting owner decision.**
+Status: **review of `e27ef9d`. The owner approved the correction set on 23 Nov 2026; every finding was addressed locally — see BIOMETRIC_B5_DAT_IMPORT_CORRECTION_PASS.md.**
 - Date: 23 Nov 2026. Reviewed commit: `e27ef9d` on `feature/biometric-b1` (parent `3ecdf17`).
 - No implementation code and no part of migration 0013 was changed during this review.
 - No hosted SQL, no production, no deploy/merge/tag, no X2008 connection, no pg_cron.

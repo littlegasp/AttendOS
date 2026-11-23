@@ -1,6 +1,6 @@
 # B5 DAT import foundation — Stage 1 and Stage 2 implementation report
 
-Status: **implemented and tested locally, awaiting owner review.**
+Status: **implemented and tested locally; superseded in parts by the correction pass (BIOMETRIC_B5_DAT_IMPORT_CORRECTION_PASS.md, 23 Nov 2026).**
 - Date: 23 Nov 2026. Branch: `feature/biometric-b1`. Not merged, tagged or deployed.
 - No hosted SQL was run and no migration was applied to any company database.
 - No production data or credentials were used. There was no connection to the X2008, no eSSL software was installed,
@@ -84,7 +84,7 @@ The full specification is in BIOMETRIC_DAT_FORMAT.md §4–§6. The implemented 
 | Step | Rule |
 |---|---|
 | Accept | UTF-8 (BOM noted, not required), at most 16 MiB, 200,000 lines, 512 bytes per line, 16 fields. A NUL byte or invalid UTF-8 refuses the file as binary or encrypted |
-| Lines | Split on CRLF or LF. Each row records its own terminator. A missing final newline is recorded, not "fixed" |
+| Lines | **CRLF only** (corrected 23 Nov 2026: this row first said "CRLF or LF", which was wrong). A file with any bare LF or CR is refused as `unexpected_line_endings`. Each row records its own terminator. A missing final newline is recorded, not "fixed" |
 | Fields | Split on TAB only. Every field is kept as the exact text, including padding. A count other than 6 makes the row `malformed` (kept) |
 | Code | Leading spaces removed from field 1, nothing else. Never converted to a number, so `010` ≠ `10`. Invalid codes are kept and labelled `empty_code`, `trailing_space`, `inner_space`, `too_long` or `invalid_character`. A field-1 width other than 9 adds the flag `code_width_unexpected` |
 | Time | Field 2 must match `YYYY-MM-DD HH:MM:SS` exactly. The string is kept as it is. The instant is calculated in the batch's declared zone (default: the company zone). A time in a DST gap or overlap is labelled `nonexistent_local_time` or `ambiguous_local_time` and gets **no** instant. Asia/Kolkata has neither |
