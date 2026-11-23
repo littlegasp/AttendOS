@@ -105,22 +105,26 @@ The report shows every day from 01 to 23 Nov for code 10. Days with a punch time
 ## 3. The 21 November discrepancy
 
 **Facts [OBSERVED]:**
-- The DAT export holds **two** records for code 10 on 21 Nov 2026: `15:49:16` (line 150) and `15:53:01` (line 151),
-  **3 minutes 45 seconds** apart.
-- The HR report shows 21-Nov with InTime `15:49`, a **blank OutTime**, and status "Absent (No OutPunch)".
-- The 15:53:01 record doesn't appear anywhere in the report row for that day.
+- The **supplied DAT export** contains **two** records for code 10 on 21 Nov 2026: `15:49:16` (line 150) and
+  `15:53:01` (line 151), **3 minutes 45 seconds** apart.
+- The **HR report** displays only one punch for that day: InTime `15:49`, with a **blank OutTime** and status
+  "Absent (No OutPunch)".
+- The 15:53:01 record from the DAT export doesn't appear anywhere in the report row for that day.
+- **It has not been established that the eSSL software received or processed the 15:53:01 record.** The two
+  artifacts may not have been built from the same records (§4 E1, E2).
 
 **What this establishes:**
-- The number of raw records on a day does not determine In/Out in eSSL's report. Two raw records didn't produce an
-  In and an Out here.
-- So a **raw event count is not a reliable IN/OUT pairing rule.** Nothing in AttendOS may treat "first record = in,
-  second = out", or "even number of records = complete day", as a rule.
+- The two artifacts disagree for 21 Nov. The DAT export has two raw records, and the HR report shows one InTime and
+  no OutTime.
+- Whatever the cause, raw records and an attendance report's In/Out can differ. So **raw event count alone is not a
+  reliable basis for IN/OUT pairing in AttendOS.** Nothing in AttendOS may treat "first record = in, second = out",
+  or "even number of records = complete day", as a rule.
 - Raw device records and the HR report must remain **separate kinds of data**. The DAT import keeps every raw record,
   including line 151, whatever any report shows.
 
 **What this does *not* establish (deliberately not inferred):**
-- **why** the second record isn't shown;
-- whether the eSSL software received the 15:53:01 record at all;
+- whether the eSSL software received or processed the 15:53:01 record at all;
+- if it did, **why** the report doesn't show it;
 - any eSSL pairing rule, minimum interval, shift window or duplicate-punch setting;
 - any meaning of DAT fields 3–6 for either record. They stay **UNKNOWN** and are not used to explain the difference.
 

@@ -196,9 +196,9 @@ The supplied file has none of the first and third kind [OBSERVED].
 - They are raw device records, not attendance sessions; two of them are on the same day.
 - Their exact timestamps were first withheld from this document as one identifiable person's attendance data. On
   23 Nov 2026 the owner, who is that person, supplied them for the HR-report comparison. They are recorded in
-  BIOMETRIC_HR_REPORT_CORRELATION.md §2.1, which also compares them with the eSSL HR report. The 21 Nov pair, 3 min
-  45 s apart, is shown by that report as one InTime with no OutTime. That confirms that raw record count is not an
-  IN/OUT rule.
+  BIOMETRIC_HR_REPORT_CORRELATION.md §2.1, which also compares them with the eSSL HR report. On 21 Nov the export contains two records 3 min 45 s apart, and that
+  report displays only the first as InTime. Whether eSSL received the second is not established. Raw record count is
+  not a reliable basis for IN/OUT pairing.
 - **No other code is mapped.** The other 16 codes are reported as unmapped when the file is imported. Any
   similarity between a device code and an AttendOS employee code is ignored.
 - The mapping is created by an Admin or HR in the existing mapping screen, as a device-specific mapping on the X2008
