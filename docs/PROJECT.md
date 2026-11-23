@@ -384,3 +384,10 @@ fields 3–6 unknown and never interpreted, parser tests P1–P23, real-file che
 (the device showed 31,207 records; the export has 151 — not treated as full history). 22 synthetic fixtures in
 tests/fixtures/dat (no real data; real exports ignored by .gitignore). Code `10` → WR198 remains the only mapping.
 
+**HR eSSL report correlation (23 Nov 2026, documentation only):** the eSSL "Daily Attendance Report (Summary Report)"
+(printed 23 Nov 2026) is recorded as a reference artifact, not raw data, and not committed (other employees' data).
+For code 10 the report's three InTimes match DAT lines 24, 95 and 150 to the minute. DAT line 151 (21 Nov 15:53:01,
+3 min 45 s after line 150) is not shown; the report gives OutTime blank, "Absent (No OutPunch)". Recorded without
+inferring eSSL's reason: raw record count is not an IN/OUT rule; pairing stays outside the DAT parser.
+docs/biometric/BIOMETRIC_HR_REPORT_CORRELATION.md (evidence E1–E5 needed, questions Q1–Q9).
+

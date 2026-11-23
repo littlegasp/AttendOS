@@ -194,8 +194,11 @@ The supplied file has none of the first and third kind [OBSERVED].
 
 - The supplied file has **four** records whose extracted code is `10`, at **lines 24, 95, 150 and 151** [OBSERVED].
 - They are raw device records, not attendance sessions; two of them are on the same day.
-- Their exact timestamps are part of the owner's inspection, **not repeated in this repository**: they are one
-  identifiable person's attendance data. The real-file check (§8.2) asserts them from the owner's local copy.
+- Their exact timestamps were first withheld from this document as one identifiable person's attendance data. On
+  23 Nov 2026 the owner, who is that person, supplied them for the HR-report comparison. They are recorded in
+  BIOMETRIC_HR_REPORT_CORRELATION.md §2.1, which also compares them with the eSSL HR report. The 21 Nov pair, 3 min
+  45 s apart, is shown by that report as one InTime with no OutTime. That confirms that raw record count is not an
+  IN/OUT rule.
 - **No other code is mapped.** The other 16 codes are reported as unmapped when the file is imported. Any
   similarity between a device code and an AttendOS employee code is ignored.
 - The mapping is created by an Admin or HR in the existing mapping screen, as a device-specific mapping on the X2008
@@ -288,4 +291,5 @@ A mismatch is reported to the owner, not "fixed".
 | Q7 | Does eSSL software (eTimeTrackLite or other) modify, filter or re-export the original records anywhere in this workflow, or did this file come straight from the device to the USB stick? | provenance; trust is "imported file" only |
 | Q8 | The supplied name ends ` (1)(1)`: is this a copy of the stick's file? Can the next file be supplied straight from the stick? | provenance |
 | Q9 | Please record the SHA-256 of the original file (hash only) for §1 | ties the real-file check to the exact file inspected |
+| Q11 | See BIOMETRIC_HR_REPORT_CORRELATION.md §5 for the questions raised by comparing this export with the eSSL HR report (data source, 15:53:01 punch, shift settings, seconds) | the report and the export may not come from the same records |
 | Q10 | Can the export include other files (user, fingerprint, photo data)? Which files appeared on the stick? | anything other than the attendance file is out of scope and must never be uploaded |
