@@ -149,7 +149,7 @@ def main():
     ap.add_argument("--scale", action="store_true")
     a = ap.parse_args()
     try:
-        log = g.Log(f"{datetime.datetime.now():%Y%m%d-%H%M%S}-dat-hosted-matrix.txt")
+        log = g.Log(f"{datetime.datetime.now():%Y%m%d-%H%M%S-%f}-dat-hosted-matrix.txt")
         api = Api(log)
     except g.Stop as e:
         print(e)

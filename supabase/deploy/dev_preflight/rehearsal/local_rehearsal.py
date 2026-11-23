@@ -359,6 +359,8 @@ def main():
         check(not diff, f"rollback: the schema equals a fresh 0012 database exactly — tables, columns, constraints, indexes, triggers, policies, grants, "
                         f"function bodies and privileges ({len(a_snap.splitlines())} catalog entries compared, {len(diff)} differences)")
         r = tool(["dev_sql.py", str(REPO / "supabase/deploy/verify_hosted.sql")], env)
+        for l in not_ok_rows(r.stdout):
+            log("   not ok: " + l[:240])
         check(r.returncode == 0 and not not_ok_rows(r.stdout), "rollback: verify_hosted.sql is all ok for the 0012 state")
         r = tool(["dev_apply_migrations.py", "--commit", a.commit], env)
         check(r.returncode == 0 and r.stdout.count("   ok (") == 1 and r.stdout.count("skip ") == 12, "re-apply: the frozen 0013 (same SHA-256) applies again after the rollback")

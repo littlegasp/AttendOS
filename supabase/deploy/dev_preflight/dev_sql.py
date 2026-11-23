@@ -29,7 +29,7 @@ def main():
     except g.Stop as e:
         print(e)
         return 2
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     names = ["mark"] if a.mark else [Path(f).stem for f in a.files]
     log = g.Log(f"{stamp}-sql-{'-'.join(names)[:80]}.txt")
     log(f"AttendOS dev preflight · project {ref} · {datetime.datetime.now().isoformat(timespec='seconds')}")

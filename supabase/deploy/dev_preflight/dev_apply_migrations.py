@@ -44,7 +44,7 @@ def main():
     except g.Stop as e:
         print(e)
         return 2
-    log = g.Log(f"{datetime.datetime.now():%Y%m%d-%H%M%S}-apply-migrations.txt")
+    log = g.Log(f"{datetime.datetime.now():%Y%m%d-%H%M%S-%f}-apply-migrations.txt")
     log(f"AttendOS dev preflight · apply migrations · project {ref}")
     head = subprocess.run(["git", "-C", str(g.REPO), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     want = subprocess.run(["git", "-C", str(g.REPO), "rev-parse", a.commit], capture_output=True, text=True).stdout.strip()

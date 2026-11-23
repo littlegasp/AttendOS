@@ -48,7 +48,7 @@ class Ctx:
         self.ref, env = g.db_env()
         self.kw = dict(host=env["PGHOST"], port=env["PGPORT"], user=env["PGUSER"], dbname=env["PGDATABASE"],
                        password=env.get("PGPASSWORD"), sslmode=env.get("PGSSLMODE", "prefer"), application_name="attendos-dev-preflight")
-        self.log = g.Log(f"{datetime.datetime.now():%Y%m%d-%H%M%S}-dat-hosted-scale.txt")
+        self.log = g.Log(f"{datetime.datetime.now():%Y%m%d-%H%M%S-%f}-dat-hosted-scale.txt")
         self.fails = []
         self.created = []
 
