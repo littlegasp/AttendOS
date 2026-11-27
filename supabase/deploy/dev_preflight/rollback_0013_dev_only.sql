@@ -8,7 +8,10 @@
 --   1. psql variables dev_ref and confirm must be given (pasting this into a SQL editor fails on the first line);
 --   2. the database must carry the AttendOS development marker for exactly dev_ref (dev_guard.sql, and again here);
 --   3. confirm must be exactly REMOVE-0013-FROM-DEVELOPMENT;
---   4. no raw biometric event or attendance row may reference a DAT import batch (they never should).
+--   4. no raw biometric event or attendance row may reference a DAT import batch (they never should);
+--   5. the database may hold ONLY the synthetic seed: companies dev-alpha / dev-beta and employees at the reserved
+--      domain attendos-dev.example. Any other company or employee (a real company database, even one wrongly
+--      marked) stops it. This check does not depend on the marker.
 -- What it removes: the 0013 functions, the four DAT tables, the columns/indexes/trigger 0013 added to
 -- biometric_import_batches, and every DAT batch row (synthetic test data). It restores the 0010 unique constraint,
 -- company_refs trigger, read policy and SELECT grant. audit_log entries written by 0013 stay (append-only by design).
@@ -37,6 +40,10 @@ begin
   end if;
   if to_regclass('public.biometric_import_rows') is null then
     raise exception 'STOP: 0013 is not installed; nothing to remove';
+  end if;
+  if exists (select 1 from public.companies where slug not in ('dev-alpha', 'dev-beta'))
+     or exists (select 1 from public.employees where email is null or email not like '%@attendos-dev.example') then
+    raise exception 'STOP: this database holds a company or employee that is not the synthetic development seed — it may be a company database; nothing was changed';
   end if;
   if exists (select 1 from public.biometric_raw_events r join public.biometric_import_batches b on b.id = r.import_batch_id where b.state <> 'legacy')
      or exists (select 1 from public.attendance_events a join public.biometric_import_batches b on b.id = a.import_batch_id where b.state <> 'legacy') then

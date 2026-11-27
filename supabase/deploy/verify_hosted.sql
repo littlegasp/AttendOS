@@ -75,7 +75,7 @@ checks(item, ok, detail) as (
          case when not exists (select 1 from fns where proname = 'biometric_project_day') then 'not installed' else
            -- read through query_to_xml so this file also runs before 0010 (the table is resolved only when it exists)
            'installed; projection enabled for: ' || coalesce((xpath('/row/v/text()', query_to_xml($q$select string_agg(c.slug, ', ') as v
-                      from public.biometric_settings b join public.companies c on c.id = b.company_id where b.projection_enabled$q$, false, false, '')))[1]::text,
+                      from public.biometric_settings b join public.companies c on c.id = b.company_id where b.projection_enabled$q$, false, true, '')))[1]::text,
                     'no company') end
   -- ---------------------------------------------------------------- 0013 B5 DAT import (each item is true when 0013 is not installed)
   union all

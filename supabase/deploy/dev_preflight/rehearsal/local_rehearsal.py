@@ -138,6 +138,14 @@ def not_ok_rows(out):
     return [l for l in out.splitlines() if re.search(r"\|\s*f\s*\|", l) or re.search(r"\|\s*f\s*$", l)]
 
 
+def prereq_fails(out):
+    """row numbers whose result is FAIL in check_biometric_prereqs.sql output (n | item | result | found | needed_by),
+    and the summary row 99 result"""
+    rows = [re.match(r"\s*(\d+)\s*\|[^|]*\|\s*(PASS|FAIL|N/A|INFO)\s*\|", l) for l in out.splitlines()]
+    rows = [(int(m.group(1)), m.group(2)) for m in rows if m]
+    return {n for n, res in rows if res == "FAIL" and n != 99}, dict(rows).get(99), len(rows)
+
+
 class Gateway(http.server.BaseHTTPRequestHandler):
     anon = None
 
@@ -259,16 +267,16 @@ def main():
                   f"postgresql://postgres.differentprojectrefa:{pw}@/{DB}?host={PG['PGHOST']}&port={PG['PGPORT']}"}))
         check(r.returncode != 0, "the marker cannot be rewritten for another reference")
         r = tool(["dev_sql.py", "check_biometric_prereqs.sql"], env)
-        bad = not_ok_rows(r.stdout)
-        flagged = {int(m.group(1)) for l in bad for m in [re.match(r"\s*(\d+)\s*\|", l)] if m}
-        check(r.returncode == 0 and {13, 14} <= flagged and not (flagged - {6, 7, 13, 14}),
-              f"G3 prerequisites: only CREATE-on-public (13, 14) and the not-yet-needed pg_cron rows (6, 7) are flagged (flagged: {sorted(flagged)})")
+        flagged, summary, nrows = prereq_fails(r.stdout)
+        check(r.returncode == 0 and nrows == 22 and flagged == {13, 14} and summary == "FAIL",
+              f"G3 prerequisites on the fresh project: 21 rows + summary, FAIL only for CREATE-on-public (13, 14) (FAIL: {sorted(flagged)}, summary {summary})")
         r = tool(["dev_sql.py", "dev_revoke_public_create.sql"], env)
         check(r.returncode == 0 and psql(DB, "select has_schema_privilege('anon','public','CREATE') or has_schema_privilege('authenticated','public','CREATE')") == "f",
               "G3 D5: dev_revoke_public_create.sql revokes CREATE on public from anon and authenticated (verified afterwards)")
         r = tool(["dev_sql.py", "check_biometric_prereqs.sql"], env)
-        flagged = {int(m.group(1)) for l in not_ok_rows(r.stdout) for m in [re.match(r"\s*(\d+)\s*\|", l)] if m}
-        check(r.returncode == 0 and not (flagged - {6, 7}), f"G3 prerequisites after D5: nothing flagged except the later pg_cron rows ({sorted(flagged)})")
+        flagged, summary, nrows = prereq_fails(r.stdout)
+        check(r.returncode == 0 and nrows == 22 and not flagged and summary == "PASS",
+              f"G3 prerequisites after D5: summary PASS, no FAIL (FAIL: {sorted(flagged)}, summary {summary})")
 
         # ------------------------------------------------------------ G4 migrations + verify
         r = tool(["dev_apply_migrations.py", "--commit", "0000000"], env)
@@ -281,6 +289,11 @@ def main():
                 log("   not ok: " + l[:240])
             check(r.returncode == 0 and not not_ok_rows(r.stdout) and r.stdout.count("| t") >= 21,
                   f"G4 verify_hosted.sql after {through}: all 21 items ok (items 15–21 for 0013)")
+            r = tool(["dev_sql.py", "check_biometric_prereqs.sql"], env)
+            flagged, summary, nrows = prereq_fails(r.stdout)
+            check(r.returncode == 0 and nrows == 22 and not flagged and summary == "PASS"
+                  and re.search(r"\|\s*21\s*\|.*\|\s*INFO\s*\|\s*0001–" + through, r.stdout) is not None,
+                  f"G4 check_biometric_prereqs.sql after {through}: summary PASS, no SQL error, row 21 detects 0001–{through} (FAIL: {sorted(flagged)})")
         r = tool(["dev_apply_migrations.py", "--commit", a.commit], env)
         check(r.returncode == 0 and r.stdout.count("skip ") == 13, "G4 re-running the apply tool changes nothing (all 13 recorded, identical)")
 
@@ -346,6 +359,12 @@ def main():
                  tool_env(DB, pw, {"ATTENDOS_DEV_DB_URL": f"postgresql://postgres.{OTHER_REF}:{pw}@/{DB}?host={PG['PGHOST']}&port={PG['PGPORT']}"}))
         check(r.returncode != 0 and "STOP" in r.stdout and snapshot(DB) == snap_before,
               "rollback guard 5: a connection string naming another project is refused before connecting")
+        psql(DB, "insert into public.companies (name, slug) values ('Stand-in real company', 'standin-real-co')")
+        r = tool(["dev_sql.py", "rollback_0013_dev_only.sql", "-v", "confirm=REMOVE-0013-FROM-DEVELOPMENT"], env)
+        still = psql(DB, "select to_regclass('public.biometric_import_rows') is not null")
+        psql(DB, "delete from public.companies where slug = 'standin-real-co'")
+        check(r.returncode != 0 and "not the synthetic development seed" in r.stdout and snapshot(DB) == snap_before and still == "t",
+              "rollback guard 6: the marked project holding a non-synthetic company (stand-in for a company database that was wrongly marked) is refused, with the right reference and phrase; nothing changed")
 
         # ------------------------------------------------------------ rollback works: exactly the 0012 state
         build_db(REFDB, a.auth_dir)

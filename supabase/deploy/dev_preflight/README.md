@@ -29,7 +29,7 @@ Rules:
 | `dev_sql.py` | runs guarded SQL files (`--mark` writes the marker) | as the file says |
 | `dev_mark_project.sql` | the development marker (once, new empty project only) | marker schema |
 | `dev_guard.sql` | prepended to every script by the wrappers | no |
-| `../check_biometric_prereqs.sql` | V1 prerequisites (read-only) | no |
+| `../check_biometric_prereqs.sql` | V1 prerequisites (read-only); every row PASS / FAIL / N/A / INFO, row 99 = summary; safe in any state | no |
 | `dev_revoke_public_create.sql` | D5: revoke CREATE on `public` from anon and authenticated; stops if still granted | privileges |
 | `dev_apply_migrations.py` | 0001–0013, one transaction each, exact commit and SHA-256 | schema |
 | `../verify_hosted.sql` | V2 catalog checks (read-only; items 15–21 for 0013) | no |
@@ -38,7 +38,7 @@ Rules:
 | `dat_hosted_scale.py` | G6: S1–S7, C1–C3, V7 boundary snapshot, inside the database as signed-in users | synthetic batches, removed |
 | `dev_autovacuum.sql` | manual on/off for the rows table (the scale tool also does this itself and always resets) | table option |
 | `rollback_0013_dev_only.sql` | remove 0013 from the development project only (§6.2) | schema |
-| `rehearsal/` | the local rehearsal of all of the above (no hosted system) | local only |
+| `rehearsal/` | local tests only (no hosted system): `test_devguard.py`, `test_prereqs_states.py`, `local_rehearsal.py` | local only |
 
 ## Exact owner actions (only after the matching gate is approved)
 
@@ -70,14 +70,18 @@ Rules:
 ### G3: marker, prerequisites, D5
 9. `python3 dev_sql.py --mark`: shows `development | <ref>`.
 10. `python3 dev_sql.py check_biometric_prereqs.sql`. Share the report file (redacted) with Claude.
-    - Expected: `ok = t` everywhere, except rows 6–7 (pg_cron, not used) and possibly 13–14 (CREATE on public).
-    - **Row 15 false = STOP.**
-11. If row 13 or 14 is false: `python3 dev_sql.py dev_revoke_public_create.sql`. Then repeat step 10: rows 13–14 must
-    be `t`.
+    - Each row says `PASS`, `FAIL`, `N/A` (not applicable yet, e.g. row 12 before 0001) or `INFO`. Row 99 is the summary.
+    - Expected on the new project: `FAIL` at most in rows 13–14 (CREATE on public). Row 21 says `none (fresh project)`.
+    - **Row 15 `FAIL` = STOP.** Any other `FAIL` = STOP and share the report.
+11. If row 13 or 14 is `FAIL`: `python3 dev_sql.py dev_revoke_public_create.sql`. Then repeat step 10: row 99 must be
+    `PASS`.
 
 ### G4: migrations and catalog
 12. `python3 dev_apply_migrations.py --commit <approved commit>`: 13 × `ok`. Any STOP: share the report, do nothing else.
-13. `python3 dev_sql.py verify_hosted.sql`: all 21 items `t`. Share the report.
+13. `python3 dev_sql.py verify_hosted.sql`: all 21 items `t`. Then `python3 dev_sql.py check_biometric_prereqs.sql`:
+    row 99 `PASS`, row 21 `0001–0013`. Share both reports.
+    (You may also apply in three steps with `--through 0009`, `--through 0012`, then without `--through`, and run both
+    checks after each step; the local rehearsal does exactly that.)
 
 ### G5: synthetic data, logins, API checks
 14. `python3 dev_sql.py dev_seed_synthetic.sql`.
@@ -104,7 +108,7 @@ Rules:
 Deleting and recreating the project is equally valid.
 
 ## STOP rule
-Any `STOP`, any `FAIL`, any `ok = f` outside the expected rows, or any permission difference means:
+Any `STOP`, any `FAIL` outside the expected rows (13–14 before D5), any `ok = f`, or any permission difference means:
 - do nothing further on the project;
 - share the redacted report;
 - nobody improvises a fix on the hosted project.
