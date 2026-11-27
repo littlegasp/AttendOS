@@ -292,7 +292,7 @@ def main():
             r = tool(["dev_sql.py", "check_biometric_prereqs.sql"], env)
             flagged, summary, nrows = prereq_fails(r.stdout)
             check(r.returncode == 0 and nrows == 22 and not flagged and summary == "PASS"
-                  and re.search(r"\|\s*21\s*\|.*\|\s*INFO\s*\|\s*0001–" + through, r.stdout) is not None,
+                  and re.search(r"^\s*21\s*\|.*\|\s*INFO\s*\|\s*0001–" + through, r.stdout, re.M) is not None,
                   f"G4 check_biometric_prereqs.sql after {through}: summary PASS, no SQL error, row 21 detects 0001–{through} (FAIL: {sorted(flagged)})")
         r = tool(["dev_apply_migrations.py", "--commit", a.commit], env)
         check(r.returncode == 0 and r.stdout.count("skip ") == 13, "G4 re-running the apply tool changes nothing (all 13 recorded, identical)")
@@ -359,10 +359,11 @@ def main():
                  tool_env(DB, pw, {"ATTENDOS_DEV_DB_URL": f"postgresql://postgres.{OTHER_REF}:{pw}@/{DB}?host={PG['PGHOST']}&port={PG['PGPORT']}"}))
         check(r.returncode != 0 and "STOP" in r.stdout and snapshot(DB) == snap_before,
               "rollback guard 5: a connection string naming another project is refused before connecting")
-        psql(DB, "insert into public.companies (name, slug) values ('Stand-in real company', 'standin-real-co')")
+        # stand-in row added and removed with triggers off (local superuser only), so the append-only audit log is untouched
+        psql(DB, "set session_replication_role = replica; insert into public.companies (name, slug) values ('Stand-in real company', 'standin-real-co')")
         r = tool(["dev_sql.py", "rollback_0013_dev_only.sql", "-v", "confirm=REMOVE-0013-FROM-DEVELOPMENT"], env)
         still = psql(DB, "select to_regclass('public.biometric_import_rows') is not null")
-        psql(DB, "delete from public.companies where slug = 'standin-real-co'")
+        psql(DB, "set session_replication_role = replica; delete from public.companies where slug = 'standin-real-co'")
         check(r.returncode != 0 and "not the synthetic development seed" in r.stdout and snapshot(DB) == snap_before and still == "t",
               "rollback guard 6: the marked project holding a non-synthetic company (stand-in for a company database that was wrongly marked) is refused, with the right reference and phrase; nothing changed")
 
