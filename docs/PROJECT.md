@@ -439,4 +439,8 @@ matrix and scale scripts, dev-only rollback). `check_biometric_prereqs.sql` rows
 items 15–21 added; pre-existing `verify_hosted.sql` item 14 defect fixed (failed before 0010). Local rehearsal of
 the whole owner sequence on a Supabase-like stack (real Supabase Auth, PostgREST): 35/35; rollback equals a fresh
 0012 schema exactly. Report: docs/biometric/BIOMETRIC_B5_DEV_PREFLIGHT_G1_REPORT.md. Nothing hosted created or run.
-Next: owner decides D1 cost (Micro proposed) and G1b (hosted B3.3/B3.4 suites), then G2 (owner creates the project).
+Owner review 27 Nov 2026: G2 not approved yet; correction done locally: prerequisite checker gives PASS / FAIL / N/A /
+INFO in every state (tested fresh → 0013, superuser and non-superuser, 17/17; fixed: row 12 never evaluated, a
+permission error for non-superusers), rollback also refuses any non-synthetic company or employee, rehearsal 39/39.
+Hosted performance not established (local 200k validation 2.6–3.9 s); B3.3/B3.4 hosted suites deferred.
+Next: owner decides D1 cost (Micro proposed), then G2 (owner creates the project).
